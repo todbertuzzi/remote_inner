@@ -128,3 +128,66 @@ add_action('template_redirect', 'ipt_redirect_conto_iscrizione');
 
 /* MENU UTENTE */
 require_once get_stylesheet_directory() . '/menu-utente.php';
+
+
+
+
+/**
+ * Assegna automaticamente il ruolo "invitato" agli utenti che si registrano
+ * tramite un invito (ad esempio alla pagina /invito-scrivania).
+ *
+ * - Il ruolo viene passato tramite un campo hidden nel form di registrazione.
+ * - Utile per distinguere questi utenti da altri ruoli come subscriber o customer.
+ */
+add_action('user_register', function($user_id) {
+    if (isset($_POST['user_role']) && $_POST['user_role'] === 'invitato') {
+        $user = new WP_User($user_id);
+        $user->set_role('invitato'); // Assicurati che esista il ruolo
+    }
+});
+
+
+/**
+ * Registra il ruolo personalizzato "invitato" se non esiste già.
+ *
+ * - Questo ruolo è usato per identificare gli utenti che si registrano
+ *   tramite un invito alla piattaforma (es. per accedere al Tool Scrivania).
+ * - Ha solo i permessi minimi necessari per accedere (capability 'read').
+ */
+add_action('init', function() {
+    if (!get_role('invitato')) {
+        add_role('invitato', 'Utente Invitato', [
+            'read' => true,
+            'edit_posts' => false,
+            'delete_posts' => false
+        ]);
+    }
+});
+
+
+
+/**
+ * Aggiunge un filtro per il ruolo "invitato" nella pagina utenti di WordPress
+ * e una colonna "Tipo Utente" che mostra il ruolo principale di ciascun utente.
+ *
+ * Utile per identificare e gestire facilmente gli utenti registrati tramite invito.
+ */
+add_filter('views_users', function($views) {
+    $invitati = count_users()['avail_roles']['invitato'] ?? 0;
+    $url = add_query_arg('role', 'invitato', 'users.php');
+    $views['invitato'] = "<a href=\"$url\">Utenti Invitati <span class=\"count\">($invitati)</span></a>";
+    return $views;
+});
+
+add_filter('manage_users_columns', function($columns) {
+    $columns['tipo_utente'] = 'Tipo Utente';
+    return $columns;
+});
+
+add_filter('manage_users_custom_column', function($value, $column_name, $user_id) {
+    if ($column_name === 'tipo_utente') {
+        $user = get_userdata($user_id);
+        return ucfirst($user->roles[0] ?? '-');
+    }
+    return $value;
+}, 10, 3);

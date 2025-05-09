@@ -1,14 +1,78 @@
 <?php
 
 /**
- * Plugin Name: Gioco Inviti Manager
- * Description: Gestisce inviti ai giochi con limite per Welcome, token univoci e invio email via wp_mail() (FluentSMTP/Elastic).
+ * Plugin Name: Innerplay - Inviti Manager
+ * Description: Gestisce inviti ai giochi e al tool scrivania con limite per Welcome, token univoci e invio email via wp_mail() (FluentSMTP/Elastic).
  * Version: 1.0
- * Author: Il Tuo Nome
+ * Author: Emiliano Pallini
  */
 
 if (!defined('ABSPATH')) exit;
 
+/**
+ * Funzione AJAX per inviare inviti al Tool Scrivania.
+ *
+ * - Riceve: email dei contatti, data e orario della sessione
+ * - Genera un token univoco per ogni invito
+ * - Salva ogni invito nella tabella `wp_scrivania_invitati`
+ * - Invia un'email al contatto con link e dettagli (data e ora)
+ *
+ * Chiamata da JavaScript con `action: 'attiva_scrivania'`
+ * dalla modale dedicata nel frontend della dashboard utente.
+ */
+add_action('wp_ajax_attiva_scrivania', 'gim_attiva_scrivania');
+function gim_attiva_scrivania() {
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Utente non loggato.');
+    }
+
+    $user_id = get_current_user_id();
+    $emails = $_POST['email_destinatario'] ?? [];
+    $data = sanitize_text_field($_POST['data_invito'] ?? '');
+    $ora = sanitize_text_field($_POST['ora_invito'] ?? '');
+
+    if (!is_array($emails) || !$data || !$ora) {
+        echo '<div style="color:red;">Dati mancanti o non validi.</div>';
+        wp_die();
+    }
+
+    $emails = array_filter(array_map('sanitize_email', $emails));
+    if (empty($emails)) {
+        echo '<div style="color:red;">Nessun contatto valido.</div>';
+        wp_die();
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'scrivania_invitati';
+    $sent = 0;
+
+    foreach ($emails as $email) {
+        $token = wp_generate_password(16, false);
+
+        $wpdb->insert($table, [
+            'invitante_id' => $user_id,
+            'invitato_email' => $email,
+            'data_invito' => $data,
+            'ora_invito' => $ora,
+            'token' => $token
+        ]);
+
+        $link = home_url('/invito-scrivania/?token=' . $token);
+        $subject = 'Invito al Tool Scrivania';
+        $body = '
+            <p>Hai ricevuto un invito al Tool Scrivania!</p>
+            <p><strong>Quando:</strong> ' . date_i18n('d/m/Y', strtotime($data)) . ' alle ' . esc_html($ora) . '</p>
+            <p><a href="' . esc_url($link) . '">Clicca qui per partecipare</a></p>
+        ';
+        $headers = ['Content-Type: text/html; charset=UTF-8'];
+
+        wp_mail($email, $subject, $body, $headers);
+        $sent++;
+    }
+
+    echo "<div style='color:green;'>Inviti inviati: $sent</div>";
+    wp_die();
+}
 
 /**
  * Funzione AJAX per inviare inviti a un gioco.

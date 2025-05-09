@@ -3,7 +3,7 @@
  * Plugin Name: Innerplay - Custom Post Types
  * Description: Registra i Custom Post Type per la piattaforma Innerplay.
  * Version: 1.0
- * Author: Il tuo nome
+ * Author: Emiliano Pallini
  */
 
 defined('ABSPATH') || exit;
