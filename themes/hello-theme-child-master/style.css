@@ -1,0 +1,65 @@
+/* 
+Theme Name: Tema child
+Theme URI: https://github.com/elementor/hello-theme-child/
+Description: Hello Elementor Child is a child theme of Hello Elementor, created by Elementor team
+Author: Elementor Team
+Author URI: https://elementor.com/
+Template: hello-elementor
+Version: 2.0.0
+Text Domain: hello-elementor-child
+License: GNU General Public License v3 or later.
+License URI: https://www.gnu.org/licenses/gpl-3.0.html
+Tags: flexible-header, custom-colors, custom-menu, custom-logo, editor-style, featured-images, rtl-language-support, threaded-comments, translation-ready
+*/
+
+/* Add your custom styles here */
+
+/* MENU UTENTE */
+.user-dropdown {
+    position: relative;
+    display: inline-block;
+    font-weight: 500;
+}
+
+.user-dropdown .user-name {
+    cursor: pointer;
+    padding: 5px 10px;
+    background: #f0f0f0;
+    border-radius: 6px;
+}
+
+.user-menu {
+    display: none;
+    position: absolute;
+    top: 120%;
+    right: 0;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    list-style: none;
+    margin: 0;
+    padding: 10px;
+    z-index: 999;
+    min-width: 160px;
+}
+
+.user-dropdown:hover .user-menu {
+    display: block;
+}
+
+.user-menu li {
+    margin: 5px 0;
+}
+
+.user-menu a {
+    text-decoration: none;
+    color: #333;
+    display: block;
+    padding: 5px;
+    border-radius: 4px;
+}
+
+.user-menu a:hover {
+    background-color: #f7f7f7;
+}
