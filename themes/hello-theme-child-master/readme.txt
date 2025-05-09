@@ -1,7 +1,7 @@
 === Hello Elementor Child ===
 
 Contributors: elemntor 
-Requires at least: 5.9!!
+Requires at least: 5.9
 Tested up to: 6.2
 Stable tag: 2.0.0
 Version: 2.0.0
