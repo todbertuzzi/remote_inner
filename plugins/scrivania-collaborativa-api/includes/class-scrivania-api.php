@@ -9,15 +9,15 @@ class Scrivania_Collaborativa_API {
     /**
      * Istanza di Pusher
      *
-     * @var Pusher
+     * @var Pusher\Pusher|null
      */
-    private $pusher;
+    private $pusher = null;
     
     /**
      * Costruttore
      */
     public function __construct() {
-        // Inizializza Pusher con le credenziali
+        // Inizializza Pusher con le credenziali (se disponibile)
         $this->init_pusher();
         
         // Registra l'endpoint REST API
@@ -44,59 +44,23 @@ class Scrivania_Collaborativa_API {
             return;
         }
         
-        $this->pusher = new Pusher\Pusher(
-            $app_key,
-            $app_secret,
-            $app_id,
-            array(
-                'cluster' => $cluster,
-                'useTLS' => true
-            )
-        );
-    }
-    
-    /**
-     * Metodo chiamato durante l'attivazione del plugin
-     */
-    public static function activate() {
-        global $wpdb;
-        $charset_collate = $wpdb->get_charset_collate();
-        
-        // Tabella delle sessioni
-        $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
-        $sql_sessions = "CREATE TABLE IF NOT EXISTS $table_sessions (
-            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            token varchar(64) NOT NULL,
-            creatore_id bigint(20) unsigned NOT NULL,
-            nome varchar(255) NOT NULL,
-            impostazioni longtext DEFAULT NULL,
-            carte longtext DEFAULT NULL,
-            creato_il datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            modificato_il datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY  (id),
-            UNIQUE KEY token (token)
-        ) $charset_collate;";
-        
-        // Tabella degli inviti
-        $table_invites = $wpdb->prefix . 'scrivania_invitati';
-        $sql_invites = "CREATE TABLE IF NOT EXISTS $table_invites (
-            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            sessione_id bigint(20) unsigned NOT NULL,
-            token varchar(64) NOT NULL,
-            invitante_id bigint(20) unsigned NOT NULL,
-            invitato_email varchar(255) NOT NULL,
-            data_invito date DEFAULT NULL,
-            ora_invito time DEFAULT NULL,
-            creato_il datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY  (id),
-            UNIQUE KEY token (token),
-            KEY sessione_id (sessione_id),
-            KEY invitato_email (invitato_email)
-        ) $charset_collate;";
-        
-        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-        dbDelta($sql_sessions);
-        dbDelta($sql_invites);
+        // Check if Pusher class exists before instantiating
+        if (class_exists('\\Pusher\\Pusher')) {
+            try {
+                $this->pusher = new \Pusher\Pusher(
+                    $app_key,
+                    $app_secret,
+                    $app_id,
+                    array(
+                        'cluster' => $cluster,
+                        'useTLS' => true
+                    )
+                );
+            } catch (Exception $e) {
+                // Log error or handle the exception
+                error_log('Pusher initialization error: ' . $e->getMessage());
+            }
+        }
     }
     
     /**
@@ -157,20 +121,24 @@ class Scrivania_Collaborativa_API {
             return new WP_Error('pusher_not_initialized', 'Pusher non è inizializzato', array('status' => 500));
         }
         
-        // Se è un canale presence, include i dati utente
-        if (strpos($channel_name, 'presence-') === 0) {
-            $presence_data = array(
-                'id' => $user_id,
-                'name' => $user_info->display_name,
-                'email' => $user_info->user_email
-            );
+        try {
+            // Se è un canale presence, include i dati utente
+            if (strpos($channel_name, 'presence-') === 0) {
+                $presence_data = array(
+                    'id' => $user_id,
+                    'name' => $user_info->display_name,
+                    'email' => $user_info->user_email
+                );
+                
+                $auth = $this->pusher->presenceAuth($channel_name, $socket_id, (string)$user_id, $presence_data);
+            } else {
+                $auth = $this->pusher->socketAuth($channel_name, $socket_id);
+            }
             
-            $auth = $this->pusher->presence_auth($channel_name, $socket_id, $user_id, $presence_data);
-        } else {
-            $auth = $this->pusher->socket_auth($channel_name, $socket_id);
+            return rest_ensure_response($auth);
+        } catch (Exception $e) {
+            return new WP_Error('pusher_auth_error', $e->getMessage(), array('status' => 500));
         }
-        
-        return rest_ensure_response($auth);
     }
     
     /**
@@ -287,11 +255,16 @@ class Scrivania_Collaborativa_API {
         
         // Emetti un evento Pusher per aggiornare tutti i client
         if ($this->pusher) {
-            $channel = 'presence-scrivania-' . $session_id;
-            $this->pusher->trigger($channel, 'session-updated', array(
-                'sessione' => $sessione,
-                'carte' => $carte
-            ));
+            try {
+                $channel = 'presence-scrivania-' . $session_id;
+                $this->pusher->trigger($channel, 'session-updated', array(
+                    'sessione' => $sessione,
+                    'carte' => $carte
+                ));
+            } catch (Exception $e) {
+                // Log the error but don't fail the request
+                error_log('Pusher trigger error: ' . $e->getMessage());
+            }
         }
         
         return array(

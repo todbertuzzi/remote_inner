@@ -16,14 +16,15 @@ class Scrivania_Ajax {
     public static function attiva_scrivania() {
         if (!is_user_logged_in()) {
             wp_send_json_error('Utente non loggato.');
+            return;
         }
 
         $user_id = get_current_user_id();
-        $emails = $_POST['email_destinatario'] ?? [];
-        $data = sanitize_text_field($_POST['data_invito'] ?? '');
-        $ora = sanitize_text_field($_POST['ora_invito'] ?? '');
+        $emails = isset($_POST['email_destinatario']) ? (array)$_POST['email_destinatario'] : [];
+        $data = isset($_POST['data_invito']) ? sanitize_text_field($_POST['data_invito']) : '';
+        $ora = isset($_POST['ora_invito']) ? sanitize_text_field($_POST['ora_invito']) : '';
 
-        if (!is_array($emails) || !$data || !$ora) {
+        if (empty($emails) || empty($data) || empty($ora)) {
             echo '<div style="color:red;">Dati mancanti o non validi.</div>';
             wp_die();
         }
@@ -114,11 +115,19 @@ class Scrivania_Ajax {
         $token = wp_generate_password(24, false);
         $nome = 'Sessione di ' . get_userdata($user_id)->display_name;
         
+        // Impostazioni iniziali
+        $impostazioni = [
+            'attiva' => false,
+            'iniziata' => null,
+            'mazzoId' => 0,
+            'sfondo' => null
+        ];
+        
         $wpdb->insert($table, [
             'token' => $token,
             'creatore_id' => $user_id,
             'nome' => $nome,
-            'impostazioni' => json_encode(['attiva' => false]),
+            'impostazioni' => wp_json_encode($impostazioni),
             'creato_il' => current_time('mysql'),
             'modificato_il' => current_time('mysql')
         ]);
