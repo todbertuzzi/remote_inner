@@ -8,7 +8,6 @@
  * - Mostra un messaggio se l'invito è scaduto o non ancora attivo
  * - Se l'orario è valido, carica il componente React per il Tool
  */
-
 /* Template Name: Invito Tool Scrivania */
 
 get_header();
@@ -33,15 +32,6 @@ if (!$invito) {
 }
 
 // Se il form di registrazione è stato inviato manualmente
-/**
- * Gestione della registrazione manuale di un utente invitato.
- * 
- * - Viene attivata solo se l'utente NON è loggato e il form 'custom_register' è stato inviato.
- * - Crea un utente con ruolo 'invitato' tramite wp_insert_user.
- * - Genera una password casuale per l'accesso futuro.
- * - Esegue login automatico e redirect alla stessa pagina.
- * - Invia una email di conferma con la password generata per accedere ad altri inviti.
- */
 if (!is_user_logged_in() && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['custom_register'])) {
     $username = sanitize_user($_POST['user_login']);
     $email = sanitize_email($_POST['user_email']);
@@ -49,10 +39,10 @@ if (!is_user_logged_in() && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POS
 
     $errors = new WP_Error();
     if (username_exists($username)) {
-        $errors->add('username', 'Questo nome utente esiste gi\u00e0.');
+        $errors->add('username', 'Questo nome utente esiste già.');
     }
     if (email_exists($email)) {
-        $errors->add('email', 'Questa email \u00e8 gi\u00e0 registrata.');
+        $errors->add('email', 'Questa email è già registrata.');
     }
 
     if (empty($errors->errors)) {
@@ -66,9 +56,8 @@ if (!is_user_logged_in() && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POS
         if (!is_wp_error($user_id)) {
             wp_set_current_user($user_id);
             wp_set_auth_cookie($user_id);
-            // Email non necessaria: l'utente ha scelto la sua password, nessun invio automatico.
 
-wp_redirect(add_query_arg(null, null));
+            wp_redirect(add_query_arg(null, null));
             exit;
         } else {
             $errors->add('registrazione', 'Errore nella creazione dell\'utente.');
@@ -97,7 +86,7 @@ if (!is_user_logged_in()) {
     echo '<p><label for="user_email">Email</label><br><input type="email" name="user_email" value="' . esc_attr($invito->invitato_email) . '" required></p>';
     echo '<input type="hidden" name="custom_register" value="1">';
     echo '<p><label for="user_pass">Scegli una password</label><br><input type="password" name="user_pass" required></p>';
-echo '<p><input type="submit" value="Registrati"></p>';
+    echo '<p><input type="submit" value="Registrati"></p>';
     echo '</form>';
     echo '</div>';
 
@@ -146,8 +135,17 @@ if ($timestamp_corrente > $timestamp_invito + 7200) {
     }, 1000);
     </script>';
 } else {
-    echo '<div id="react-tool-root"></div>';
-    echo '<script src="/path/to/your/react-app.js"></script>'; // <-- cambia con path reale
+    // Container per l'app React, simile a quello nella pagina tool-scrivania
+    echo '<div id="react-tool-root" 
+             data-token="' . esc_attr($token) . '"
+             data-user-id="' . esc_attr($current_user->ID) . '"
+             data-user-name="' . esc_attr($current_user->display_name) . '">
+         </div>';
+    
+    // Messaggio di caricamento
+    echo '<div class="loading-message" style="text-align: center; padding: 50px;">
+            <p>Caricamento del Tool Scrivania in corso...</p>
+          </div>';
 }
 
 echo '</div></main>';
