@@ -71,16 +71,17 @@ function innerplay_valida_token_callback($request) {
 
     // Protezione: il token deve appartenere all'utente loggato
     $utente_id_corrente = get_current_user_id();
-    if ($utente_id_corrente !== intval($invito->utente_id)) {
+    if ($utente_id_corrente !== intval($invito->invitante_id)) {
         return new WP_REST_Response([
             'status' => 'error', 
             'message' => 'Token non autorizzato per questo utente.',
             'token_ricevuto' => $token,
-            'query_eseguita' => $wpdb->last_query
+            /* 'query_eseguita' => $wpdb->last_query,
+            "utente_id_corrente" => $utente_id_corrente, */
         ], 403);
     }
 
-    $user = get_user_by('ID', $invito->utente_id);
+    $user = get_user_by('ID', $invito->invitante_id);
     $gioco_id = intval($invito->gioco_id);
 
     if (!$user || !$gioco_id) {

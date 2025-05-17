@@ -21,7 +21,8 @@ if (!defined('ABSPATH')) exit;
  * dalla modale dedicata nel frontend della dashboard utente.
  */
 add_action('wp_ajax_attiva_scrivania', 'gim_attiva_scrivania');
-function gim_attiva_scrivania() {
+function gim_attiva_scrivania()
+{
     if (!is_user_logged_in()) {
         wp_send_json_error('Utente non loggato.');
     }
@@ -42,6 +43,32 @@ function gim_attiva_scrivania() {
         wp_die();
     }
 
+    // Verifica limiti abbonamento
+    if (function_exists('pmpro_getMembershipLevelForUser')) {
+        $membership = pmpro_getMembershipLevelForUser($user_id);
+
+        if ($membership && strtolower($membership->name) === 'welcome') {
+            global $wpdb;
+            $table_sessioni = $wpdb->prefix . 'scrivania_sessioni';
+            $sessioni = $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM $table_sessioni WHERE creatore_id = %d",
+                $user_id
+            ));
+
+            if ($sessioni >= 1) {
+                echo '<div style="color:red;">Gli utenti Welcome possono creare massimo 1 sessione. Fai upgrade del tuo piano per creare più sessioni.</div>';
+                wp_die();
+            }
+        }
+    }
+
+    // Crea o recupera una sessione
+    $session_id = gim_create_or_get_session($user_id);
+    if (!$session_id) {
+        echo '<div style="color:red;">Errore nella creazione della sessione.</div>';
+        wp_die();
+    }
+
     global $wpdb;
     $table = $wpdb->prefix . 'scrivania_invitati';
     $sent = 0;
@@ -50,6 +77,7 @@ function gim_attiva_scrivania() {
         $token = wp_generate_password(16, false);
 
         $wpdb->insert($table, [
+            'sessione_id' => $session_id, // Aggiungi il riferimento alla sessione
             'invitante_id' => $user_id,
             'invitato_email' => $email,
             'data_invito' => $data,
@@ -75,6 +103,48 @@ function gim_attiva_scrivania() {
 }
 
 /**
+ * Crea o recupera una sessione esistente per l'utente
+ */
+function gim_create_or_get_session($user_id)
+{
+    global $wpdb;
+    $table = $wpdb->prefix . 'scrivania_sessioni';
+
+    // Verifica se esiste già una sessione
+    $session = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table WHERE creatore_id = %d ORDER BY id DESC LIMIT 1",
+        $user_id
+    ));
+
+    if ($session) {
+        return $session->id;
+    }
+
+    // Crea una nuova sessione
+    $token = wp_generate_password(24, false);
+    $nome = 'Sessione di ' . get_userdata($user_id)->display_name;
+
+    // Impostazioni iniziali
+    $impostazioni = [
+        'attiva' => false,
+        'iniziata' => null,
+        'mazzoId' => 0,
+        'sfondo' => null
+    ];
+
+    $wpdb->insert($table, [
+        'token' => $token,
+        'creatore_id' => $user_id,
+        'nome' => $nome,
+        'impostazioni' => wp_json_encode($impostazioni),
+        'creato_il' => current_time('mysql'),
+        'modificato_il' => current_time('mysql')
+    ]);
+
+    return $wpdb->insert_id;
+}
+
+/**
  * Funzione AJAX per inviare inviti a un gioco.
  *
  * - Controlla il livello di abbonamento dell'utente.
@@ -86,7 +156,8 @@ function gim_attiva_scrivania() {
  */
 add_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
 
-function gim_attiva_gioco() {
+function gim_attiva_gioco()
+{
     if (!is_user_logged_in()) {
         wp_send_json_error('Non sei loggato.');
     }

@@ -27,7 +27,7 @@ $invito = $wpdb->get_row($wpdb->prepare(
 ));
 
 if ($invito) {
-    echo '<strong>Token assegnato a utente:</strong> ' . $invito->utente_id . '<br>';
+    echo '<strong>Token assegnato a utente:</strong> ' . $invito->token . '<br>';
 } else {
     echo '<strong>Token non trovato nel database</strong><br>';
 }
