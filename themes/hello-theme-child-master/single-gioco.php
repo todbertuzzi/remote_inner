@@ -105,7 +105,7 @@ echo '</div>';
             }
           }
 
-          testValidaToken();
+         /*  testValidaToken(); */
         </script>
       </div>
     </main>

@@ -1,14 +1,15 @@
 <?php
 /**
- * Template personalizzato per gestire gli inviti al Tool Scrivania.
- *
+ * Template Name: Invito Tool Scrivania
+
  * - Riconosce l'invito tramite token (?token=...)
  * - Se l'utente non è loggato, mostra login e form di registrazione (con ruolo 'invitato')
  * - Verifica che l'email dell'utente loggato corrisponda all'invitato
  * - Mostra un messaggio se l'invito è scaduto o non ancora attivo
  * - Se l'orario è valido, carica il componente React per il Tool
+ 
+ * Questo template gestisce la verifica dell'invito e il reindirizzamento a tool-scrivania
  */
-/* Template Name: Invito Tool Scrivania */
 
 get_header();
 
@@ -56,7 +57,6 @@ if (!is_user_logged_in() && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POS
         if (!is_wp_error($user_id)) {
             wp_set_current_user($user_id);
             wp_set_auth_cookie($user_id);
-
             wp_redirect(add_query_arg(null, null));
             exit;
         } else {
@@ -103,51 +103,15 @@ if (strtolower($current_user->user_email) !== strtolower($invito->invitato_email
     exit;
 }
 
-// Valori temporali
-$data = $invito->data_invito;
-$ora = $invito->ora_invito;
-$timestamp_invito = strtotime("$data $ora");
-$timestamp_corrente = current_time('timestamp');
+// A questo punto l'utente è autenticato e autorizzato
+// Recupera l'ID della sessione
+$sessione_id = $invito->sessione_id;
 
-// Layout principale
-echo '<main class="site-main"><div class="container" style="max-width:800px; margin:0 auto; padding:2rem;">';
+// IMPORTANTE: Reindirizza alla pagina tool-scrivania con il token
+$redirect_url = home_url('/tool-scrivania/?token=' . urlencode($token));
+wp_redirect($redirect_url);
+exit;
 
-if ($timestamp_corrente > $timestamp_invito + 7200) {
-    echo '<h2>Questo invito è scaduto.</h2>';
-} elseif ($timestamp_corrente < $timestamp_invito) {
-    $tempo_rimanente = $timestamp_invito - $timestamp_corrente;
-    echo '<h2>La sessione inizierà il ' . date_i18n('d/m/Y', strtotime($data)) . ' alle ' . esc_html($ora) . '</h2>';
-    echo '<p id="countdown"></p>';
-    echo '<script>
-    const end = new Date(' . ($timestamp_invito * 1000) . ');
-    const el = document.getElementById("countdown");
-    const interval = setInterval(() => {
-        const now = new Date().getTime();
-        const distance = end - now;
-        if (distance <= 0) {
-            clearInterval(interval);
-            location.reload();
-        } else {
-            const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-            const seconds = Math.floor((distance % (1000 * 60)) / 1000);
-            el.innerHTML = `Inizia tra ${minutes}m ${seconds}s`;
-        }
-    }, 1000);
-    </script>';
-} else {
-    // Container per l'app React, simile a quello nella pagina tool-scrivania
-    echo '<div id="react-tool-root" 
-             data-token="' . esc_attr($token) . '"
-             data-user-id="' . esc_attr($current_user->ID) . '"
-             data-user-name="' . esc_attr($current_user->display_name) . '">
-         </div>';
-    
-    // Messaggio di caricamento
-    echo '<div class="loading-message" style="text-align: center; padding: 50px;">
-            <p>Caricamento del Tool Scrivania in corso...</p>
-          </div>';
-}
-
-echo '</div></main>';
-
+// Non dovremmo mai arrivare qui, ma nel caso...
 get_footer();
+?>
