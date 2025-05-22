@@ -166,7 +166,7 @@ function gim_attiva_gioco()
     $user_id = $current_user->ID;
     $gioco_id = intval($_POST['gioco_id']);
     $emails = $_POST['email_destinatario'] ?? [];
-
+    
     if (!is_array($emails)) {
         $emails = explode(',', $emails);
     }
@@ -205,7 +205,7 @@ function gim_attiva_gioco()
     $inserted = 0;
     foreach ($emails as $email) {
         $token = wp_generate_password(16, false);
-
+        
         $wpdb->insert($table, [
             'gioco_id' => $gioco_id,
             'invitante_id' => $user_id,

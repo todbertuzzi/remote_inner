@@ -106,6 +106,15 @@ if (strtolower($current_user->user_email) !== strtolower($invito->invitato_email
     exit;
 }
 
+// Se l'invito non ha ancora un utente_id associato, salvalo ora
+if (empty($invito->utente_id)) {
+    $wpdb->update(
+        $table,
+        ['utente_id' => $current_user->ID],
+        ['token' => $token]
+    );
+}
+
 
 
 // Recupera l'ID del gioco associato all'invito

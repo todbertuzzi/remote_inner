@@ -5,8 +5,8 @@ if (have_posts()) : while (have_posts()) : the_post();
 
     $titolo_gioco = get_field('titolo_gioco');
     $descrizione_gioco = get_field('descrizione_gioco');
-    $iframe_src = '/wp-content/uploads/giochi/memory-test/WebGL/index.html';
-
+    $iframe_src = get_field('unity_build_url'); //'/wp-content/uploads/giochi/memory-test/WebGL/index.html';
+  /* https://innerplaytools-dev.it/wp-content/uploads/giochi/memory-test/Build/WebGL.loader.js */
     // wp_nonce per Unity
     $unity_nonce = wp_create_nonce('wp_rest');
     $invito_token = isset($_GET['token']) ? sanitize_text_field($_GET['token']) : '';
@@ -105,7 +105,7 @@ echo '</div>';
             }
           }
 
-         /*  testValidaToken(); */
+          testValidaToken();
         </script>
       </div>
     </main>

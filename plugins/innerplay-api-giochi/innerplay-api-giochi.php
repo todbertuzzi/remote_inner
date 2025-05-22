@@ -1,5 +1,4 @@
 <?php
-
 /**
  * Plugin Name: Innerplay - API Giochi
  * Description: Gestisce gli endpoint REST per l'interazione tra giochi Unity e WordPress.
@@ -85,22 +84,20 @@ function innerplay_valida_token_callback($request)
         return new WP_REST_Response(['status' => 'error', 'message' => 'Token non valido.'], 404);
     }
 
-
-
-    // Protezione: il token deve appartenere all'utente loggato
     $utente_id_corrente = get_current_user_id();
-    if ($utente_id_corrente !== intval($invito->invitante_id)) {
+    $utente_autorizzato = intval($invito->utente_id);
+
+    if ($utente_id_corrente !== $utente_autorizzato) {
         return new WP_REST_Response([
             'status' => 'error',
             'message' => 'Token non autorizzato per questo utente.',
             'token_ricevuto' => $token,
-            "utente_id_corrente" => $utente_id_corrente,
-            "invitante_id" => $invito->invitante_id,
-           
+            'utente_id_corrente' => $utente_id_corrente,
+            'utente_autorizzato' => $utente_autorizzato,
         ], 403);
     }
 
-    $user = get_user_by('ID', $invito->invitante_id);
+    $user = get_user_by('ID', $utente_autorizzato);
     $gioco_id = intval($invito->gioco_id);
 
     if (!$user || !$gioco_id) {
@@ -142,8 +139,6 @@ function innerplay_auth_callback($request) {
         'email' => $user->user_email,
         'wp_nonce' => wp_create_nonce('wp_rest')
     ], 200);
-
-    
 }
 
 function innerplay_salva_punteggio_callback($request) {

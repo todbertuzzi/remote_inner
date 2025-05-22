@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Template Name: Tool Scrivania
  * 
@@ -25,11 +26,11 @@ if (!$has_access && function_exists('pmpro_hasMembershipLevel')) {
     $has_access = pmpro_hasMembershipLevel();
 }
 
-if (!$has_access) {
+/* if (!$has_access) {
     echo '<div class="site-main"><div class="container"><h2>Non hai i permessi necessari</h2><p>È richiesto un abbonamento attivo.</p></div></div>';
     get_footer();
     exit;
-}
+} */
 
 // Ottieni il token dall'URL
 $token = isset($_GET['token']) ? sanitize_text_field($_GET['token']) : '';
@@ -38,13 +39,13 @@ $token = isset($_GET['token']) ? sanitize_text_field($_GET['token']) : '';
 if (empty($token)) {
     global $wpdb;
     $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
-    
+
     // Cerca una sessione esistente per l'utente corrente
     $session = $wpdb->get_row($wpdb->prepare(
         "SELECT * FROM $table_sessions WHERE creatore_id = %d ORDER BY id DESC LIMIT 1",
         $current_user
     ));
-    
+
     if ($session) {
         $token = $session->token;
     } else {
@@ -72,29 +73,29 @@ if (!$session) {
         "SELECT * FROM $inviti_table WHERE token = %s",
         $token
     ));
-    
+
     if (!$invito) {
         echo '<div class="site-main"><div class="container"><h2>Token non valido</h2><p>Il token specificato non corrisponde a nessuna sessione o invito.</p></div></div>';
         get_footer();
         exit;
     }
-    
+
     // Se è un invito, recupera la sessione associata
     $session = $wpdb->get_row($wpdb->prepare(
         "SELECT * FROM $session_table WHERE id = %d",
         $invito->sessione_id
     ));
-    
+
     if (!$session) {
         echo '<div class="site-main"><div class="container"><h2>Sessione non trovata</h2><p>La sessione associata all\'invito non esiste più.</p></div></div>';
         get_footer();
         exit;
     }
-    
+
     // Verifica che l'utente corrente sia autorizzato (creatore o invitato)
     $is_creator = ($session->creatore_id == $current_user);
     $is_invited = ($invito->invitato_email == $user_data->user_email);
-    
+
     if (!$is_creator && !$is_invited) {
         echo '<div class="site-main"><div class="container"><h2>Non autorizzato</h2><p>Non sei autorizzato a partecipare a questa sessione.</p></div></div>';
         get_footer();
@@ -108,30 +109,27 @@ if (!$session) {
 ?>
 <main class="site-main">
     <div class="container" style="max-width:1200px; margin:0 auto; padding:1rem;">
-        <h1 class="page-title">Tool Scrivania</h1>
-        
-        <div id="react-tool-root" 
-             data-token="<?php echo esc_attr($token); ?>"
-             data-user-id="<?php echo esc_attr($current_user); ?>"
-             data-user-name="<?php echo esc_attr($user_data->display_name); ?>"
-             style="width: 100%; min-height: 600px; border: 1px solid #eee; background-color: #f9f9f9;">
-            <div class="loading-message" style="text-align: center; padding: 50px;">
-                <p>Caricamento della scrivania collaborativa...</p>
-                <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid rgba(0,0,0,.1); border-radius: 50%; border-top-color: #09d; animation: spin 1s linear infinite;"></div>
-            </div>
+
+        <!--  data-user-id="<?php //echo esc_attr($current_user); 
+                            ?>" -->
+        <div class="loading-message" style="text-align: center; padding: 50px;">
+            <p>Caricamento della scrivania collaborativa...</p>
+            <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid rgba(0,0,0,.1); border-radius: 50%; border-top-color: #09d; animation: spin 1s linear infinite;"></div>
         </div>
-        
+
         <style>
             @keyframes spin {
-                to { transform: rotate(360deg); }
+                to {
+                    transform: rotate(360deg);
+                }
             }
         </style>
-        
+
         <script>
             // Script di debug
             document.addEventListener('DOMContentLoaded', function() {
                 console.log('DOM caricato nella pagina tool-scrivania.php');
-                console.log('Elemento #react-tool-root:', !!document.getElementById('react-tool-root'));
+                console.log('Elemento #react-tool-root:', !!document.getElementById('root'));
             });
         </script>
     </div>
@@ -139,7 +137,8 @@ if (!$session) {
 
 <?php
 // Assicurati che gli script necessari siano caricati
-function load_scrivania_scripts() {
+function load_scrivania_scripts()
+{
     // Carica Pusher
     wp_enqueue_script(
         'pusher-js',
@@ -148,7 +147,7 @@ function load_scrivania_scripts() {
         '7.0',
         true
     );
-    
+
     // Carica script di configurazione Pusher
     wp_enqueue_script(
         'scrivania-pusher-config',
@@ -157,7 +156,7 @@ function load_scrivania_scripts() {
         '1.0',
         true
     );
-    
+
     // Pass configuration values
     wp_localize_script(
         'scrivania-pusher-config',
@@ -169,7 +168,7 @@ function load_scrivania_scripts() {
             'nonce' => wp_create_nonce('wp_rest')
         )
     );
-    
+
     // Load React app
     wp_enqueue_script(
         'scrivania-app',
