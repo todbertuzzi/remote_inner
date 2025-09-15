@@ -86,11 +86,11 @@ if (!$session) {
         $invito->sessione_id
     ));
 
-    if (!$session) {
+    /* if (!$session) {
         echo '<div class="site-main"><div class="container"><h2>Sessione non trovata</h2><p>La sessione associata all\'invito non esiste più.</p></div></div>';
         get_footer();
         exit;
-    }
+    } */
 
     // Verifica che l'utente corrente sia autorizzato (creatore o invitato)
     $is_creator = ($session->creatore_id == $current_user);
@@ -105,17 +105,35 @@ if (!$session) {
 
 // A questo punto abbiamo un token valido e l'utente è autorizzato
 // Mostriamo l'interfaccia principale
+$safe_token = isset($token) ? $token : '';
+$safe_user_id = isset($current_user) ? intval($current_user) : 0;
+$safe_user_name = isset($user_data) && $user_data ? $user_data->display_name : '';
+$safe_session_id = isset($session) && $session ? $session->id : '';
+
+
 
 ?>
+
+
 <main class="site-main">
-    <div class="container" style="max-width:1200px; margin:0 auto; padding:1rem;">
+   
+    <div class="container"
+        data-token="<?php echo esc_attr($safe_token); ?>"
+        data-user-id="<?php echo esc_attr($safe_user_id); ?>"
+        data-user-name="<?php echo esc_attr($safe_user_name); ?>"
+        data-session-id="<?php echo esc_attr($safe_session_id); ?>"
+        style="max-width:1200px; margin:0 auto; padding:1rem;">
 
         <!--  data-user-id="<?php //echo esc_attr($current_user); 
                             ?>" -->
-        <div class="loading-message" style="text-align: center; padding: 50px;">
+        <div id="scrivania-loading" class="loading-message" style="text-align: center; padding: 50px;">
             <p>Caricamento della scrivania collaborativa...</p>
             <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid rgba(0,0,0,.1); border-radius: 50%; border-top-color: #09d; animation: spin 1s linear infinite;"></div>
         </div>
+
+
+
+
 
         <style>
             @keyframes spin {
@@ -128,8 +146,12 @@ if (!$session) {
         <script>
             // Script di debug
             document.addEventListener('DOMContentLoaded', function() {
-                console.log('DOM caricato nella pagina tool-scrivania.php');
-                console.log('Elemento #react-tool-root:', !!document.getElementById('root'));
+                setTimeout(function() {
+                    const reactRoot = document.getElementById('root');
+                    if (reactRoot && reactRoot.children.length > 0) {
+                        document.getElementById('scrivania-loading').style.display = 'none';
+                    }
+                }, 2000); // Aspetta 2 secondi per il mounting
             });
         </script>
     </div>
@@ -156,6 +178,7 @@ function load_scrivania_scripts()
         '1.0',
         true
     );
+    wp_enqueue_script('wp-api');
 
     // Pass configuration values
     wp_localize_script(

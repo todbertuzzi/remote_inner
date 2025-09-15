@@ -43,10 +43,22 @@ echo '</div>';
           <p><?php echo esc_html($descrizione_gioco); ?></p>
         <?php endif; ?>
 
+        <?php
+        // Mostra un messaggio se il token non è stato passato// Includi l'user_id nel token per facilitare la verifica
+            $token = wp_create_nonce('unity_game_' . get_current_user_id());
+
+            // Aggiungi l'user_id al token per aiutare la decodifica
+            $full_token = $token . '_' . $user_id;
+        ?>
+
         <!-- iframe Unity -->
+         <!-- 
+        src="<?php echo esc_url($iframe_src); ?>?token=<?php echo esc_attr($full_token);?>"
+          
+         -->
         <iframe
           id="unityGameFrame"
-          src="<?php echo esc_url($iframe_src); ?>"
+          src="<?php echo esc_url($iframe_src . '?token=' . $full_token); ?>"
           width="100%"
           height="650"
           style="border:0;"
