@@ -142,6 +142,32 @@ function gim_attiva_scrivania() {
         wp_die();
     }
 
+    // Verifica limiti abbonamento
+    if (function_exists('pmpro_getMembershipLevelForUser')) {
+        $membership = pmpro_getMembershipLevelForUser($user_id);
+
+        if ($membership && strtolower($membership->name) === 'welcome') {
+            global $wpdb;
+            $table_sessioni = $wpdb->prefix . 'scrivania_sessioni';
+            $sessioni = $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM $table_sessioni WHERE creatore_id = %d",
+                $user_id
+            ));
+
+            if ($sessioni >= 1) {
+                echo '<div style="color:red;">Gli utenti Welcome possono creare massimo 1 sessione. Fai upgrade del tuo piano per creare più sessioni.</div>';
+                wp_die();
+            }
+        }
+    }
+
+    // Crea o recupera una sessione
+    $session_id = gim_create_or_get_session($user_id);
+    if (!$session_id) {
+        echo '<div style="color:red;">Errore nella creazione della sessione.</div>';
+        wp_die();
+    }
+
     global $wpdb;
     $table = $wpdb->prefix . 'scrivania_invitati';
     $sent = 0;
@@ -150,6 +176,7 @@ function gim_attiva_scrivania() {
         $token = wp_generate_password(16, false);
 
         $wpdb->insert($table, [
+            'sessione_id' => $session_id, // Aggiungi il riferimento alla sessione
             'invitante_id' => $user_id,
             'invitato_email' => $email,
             'data_invito' => $data,
@@ -197,7 +224,8 @@ add_action('wp_ajax_attiva_scrivania', 'gim_attiva_scrivania');
  */
 add_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
 
-function gim_attiva_gioco() {
+function gim_attiva_gioco()
+{
     if (!is_user_logged_in()) {
         echo '<div style="color:red;">Devi essere loggato.</div>';
         wp_die();

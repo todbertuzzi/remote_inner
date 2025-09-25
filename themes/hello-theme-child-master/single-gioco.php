@@ -80,7 +80,7 @@ $iframe_src = '/wp-content/uploads/giochi/memory-test/WebGL/index.html';
 
         <iframe
           id="unityGameFrame"
-          src="<?php echo esc_url($iframe_src); ?>"
+          src="<?php echo esc_url($iframe_src . '?token=' . $full_token); ?>"
           width="100%"
           height="650"
           style="border:0;"

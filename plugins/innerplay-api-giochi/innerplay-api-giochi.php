@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Plugin Name: Innerplay - API Giochi
  * Description: Gestisce gli endpoint REST per l'interazione tra giochi Unity e WordPress.
@@ -10,7 +11,8 @@
 if (!defined('ABSPATH')) exit;
 
 
-function game__get_session_by_uuid($invito_uuid) {
+function game__get_session_by_uuid($invito_uuid)
+{
     global $wpdb;
     $table_sessions = $wpdb->prefix . 'game_sessions';
     return $wpdb->get_row(

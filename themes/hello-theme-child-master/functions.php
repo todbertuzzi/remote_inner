@@ -191,3 +191,10 @@ add_filter('manage_users_custom_column', function($value, $column_name, $user_id
     }
     return $value;
 }, 10, 3);
+
+/* Per permettere le richieste cross-origin dal gioco Unity, aggiungi gli header CORS in WordPress: */
+add_action('init', function() {
+    header("Access-Control-Allow-Origin: *");
+    header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+    header("Access-Control-Allow-Headers: Authorization, Content-Type");
+});
