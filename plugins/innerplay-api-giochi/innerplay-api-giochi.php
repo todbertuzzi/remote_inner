@@ -9,99 +9,146 @@
 // Impedisce accesso diretto
 if (!defined('ABSPATH')) exit;
 
-register_activation_hook(__FILE__, 'innerplay_crea_tabella_accessi');
-function innerplay_crea_tabella_accessi() {
+
+function game__get_session_by_uuid($invito_uuid) {
     global $wpdb;
-    $table_name = $wpdb->prefix . 'giochi_accessi';
-
-    $charset_collate = $wpdb->get_charset_collate();
-
-    $sql = "CREATE TABLE IF NOT EXISTS $table_name (
-        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        utente_id BIGINT UNSIGNED NOT NULL,
-        gioco_id BIGINT UNSIGNED NOT NULL,
-        token VARCHAR(255) NOT NULL,
-        accesso_at DATETIME NOT NULL,
-        PRIMARY KEY (id),
-        KEY utente_id (utente_id),
-        KEY gioco_id (gioco_id),
-        KEY token (token)
-    ) $charset_collate;";
-
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-    dbDelta($sql);
+    $table_sessions = $wpdb->prefix . 'game_sessions';
+    return $wpdb->get_row(
+        $wpdb->prepare("SELECT * FROM {$table_sessions} WHERE invito_uuid = %s", $invito_uuid)
+    );
 }
 
-add_action('rest_api_init', function () {
-    register_rest_route('giochi/v1', '/valida-token', [
-        'methods' => 'POST',
-        'callback' => 'innerplay_valida_token_callback',
-        'permission_callback' => function () {
-            return current_user_can('read');
-        },
-    ]);
-});
-
-function innerplay_valida_token_callback($request) {
-    $params = $request->get_json_params();
-    $token = sanitize_text_field($params['token'] ?? '');
-
-    if (empty($token)) {
-        return new WP_REST_Response([
-            'status' => 'error',
-            'message' => 'Token mancante.',
-            'debug_token' => $token,
-            'raw_json' => $params
-        ], 400);
-    }
-
+function game__user_can_access_session($session_id, $current_user) {
     global $wpdb;
-    $table = $wpdb->prefix . 'giochi_invitati';
+    $table_inviti_gioco = $wpdb->prefix . 'giochi_invitati';
 
-    $invito = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM $table WHERE token = %s",
-        $token
+    // Match per utente_id
+    $byUserId = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$table_inviti_gioco} WHERE session_id = %d AND utente_id = %d",
+        $session_id, $current_user->ID
     ));
-       
-    if (!$invito) {
-        return new WP_REST_Response(['status' => 'error', 'message' => 'Token non valido.'], 404);
+    if (intval($byUserId) > 0) return true;
+
+    // Fallback: match per email invitata
+    $byEmail = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$table_inviti_gioco} WHERE session_id = %d AND invitato_email = %s",
+        $session_id, $current_user->user_email
+    ));
+    return intval($byEmail) > 0;
+}
+
+function game_get_join_code(WP_REST_Request $request) {
+    if (!is_user_logged_in()) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'auth_required'], 401);
     }
 
-  
-
-    // Protezione: il token deve appartenere all'utente loggato
-    $utente_id_corrente = get_current_user_id();
-    if ($utente_id_corrente !== intval($invito->utente_id)) {
-        return new WP_REST_Response([
-            'status' => 'error', 
-            'message' => 'Token non autorizzato per questo utente.',
-            'token_ricevuto' => $token,
-            'query_eseguita' => $wpdb->last_query
-        ], 403);
+    $invito_uuid = sanitize_text_field($request->get_param('invito_uuid'));
+    if (!$invito_uuid) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'missing_invito_uuid'], 400);
     }
 
-    $user = get_user_by('ID', $invito->utente_id);
-    $gioco_id = intval($invito->gioco_id);
-
-    if (!$user || !$gioco_id) {
-        return new WP_REST_Response(['status' => 'error', 'message' => 'Dati incompleti.'], 400);
+    $session = game__get_session_by_uuid($invito_uuid);
+    if (!$session) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'session_not_found'], 404);
+    }
+    // Scadenza
+    if (!empty($session->expires_at) && current_time('timestamp') > strtotime($session->expires_at)) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'expired'], 410);
     }
 
-    // REGISTRA ACCESSO AL GIOCO
-    $log_table = $wpdb->prefix . 'giochi_accessi';
-    $wpdb->insert($log_table, [
-        'utente_id' => $user->ID,
-        'gioco_id' => $gioco_id,
-        'token'     => $token,
-        'accesso_at' => current_time('mysql', 1)
-    ]);
+    $current_user = wp_get_current_user();
+    $isHost = intval($session->host_user_id) === intval($current_user->ID);
+
+    if (!$isHost && !game__user_can_access_session(intval($session->id), $current_user)) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'forbidden'], 403);
+    }
+
+    // Bind utente_id alla prima visita se match via email (solo invitati)
+    if (!$isHost) {
+        global $wpdb;
+        $table_inviti_gioco = $wpdb->prefix . 'giochi_invitati';
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$table_inviti_gioco}
+             SET utente_id = %d
+             WHERE session_id = %d AND utente_id IS NULL AND invitato_email = %s",
+            $current_user->ID, $session->id, $current_user->user_email
+        ));
+    }
 
     return new WP_REST_Response([
-        'status' => 'success',
-        'user_id' => $user->ID,
-        'nome' => $user->display_name,
-        'email' => $user->user_email,
-        'gioco_id' => $gioco_id,
-        'titolo_gioco' => get_the_title($gioco_id),
+        'status'   => 'ok',
+        'joinCode' => $session->join_code ?: null,
+        'isGuest'  => !$isHost,
+        'guestId'  => $current_user->ID
     ], 200);
 }
+
+function game_set_join_code(WP_REST_Request $request) {
+    if (!is_user_logged_in()) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'auth_required'], 401);
+    }
+
+    $params = $request->get_json_params();
+    $invito_uuid = isset($params['invito_uuid']) ? sanitize_text_field($params['invito_uuid']) : '';
+    $joinCode    = isset($params['joinCode']) ? sanitize_text_field($params['joinCode']) : '';
+
+    if (!$invito_uuid || !$joinCode) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'missing_params'], 400);
+    }
+
+    $session = game__get_session_by_uuid($invito_uuid);
+    if (!$session) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'session_not_found'], 404);
+    }
+
+    $current_user = wp_get_current_user();
+    if (intval($session->host_user_id) !== intval($current_user->ID)) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'forbidden'], 403);
+    }
+
+    global $wpdb;
+    $table_sessions = $wpdb->prefix . 'game_sessions';
+   
+
+    //
+    if (!empty($session->expires_at) && current_time('timestamp') > strtotime($session->expires_at)) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'expired'], 410);
+    }
+    // Aggiorna join_code e, opzionale, estendi finestra (+2h runtime)
+    $new_exp = date('Y-m-d H:i:s', current_time('timestamp') + 2*3600);
+    $updated = $wpdb->update(
+        $table_sessions,
+        ['join_code' => $joinCode, 'status' => 'started', 'expires_at' => $new_exp],
+        ['id' => intval($session->id)],
+        ['%s','%s','%s'],
+        ['%d']
+    );
+    //
+
+    if ($updated === false) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'db_error'], 500);
+    }
+
+    return new WP_REST_Response(['status' => 'ok'], 200);
+}
+
+
+add_action('rest_api_init', function () {
+    register_rest_route('game/v1', '/get-join-code', [
+        'methods'  => 'GET',
+        'callback' => 'game_get_join_code',
+        'permission_callback' => function () { return is_user_logged_in(); }
+    ]);
+    register_rest_route('game/v1', '/set-join-code', [
+        'methods'  => 'POST',
+        'callback' => 'game_set_join_code',
+        'permission_callback' => function () { return is_user_logged_in(); }
+    ]);
+    
+    // ⭐ AGGIUNGERE questo endpoint mancante
+    /* register_rest_route('giochi/v1', '/valida-token', [
+        'methods'  => 'POST',
+        'callback' => 'innerplay_valida_token_callback',
+        'permission_callback' => function () { return is_user_logged_in(); }
+    ]); */
+});

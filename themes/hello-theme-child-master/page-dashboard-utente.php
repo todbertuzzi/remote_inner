@@ -232,20 +232,8 @@ get_header(); ?>
                 $('#contattiModalList').html(data);
             });
         }
-        // Apri modale
-        $('.open-invite-modal').on('click', function() {
-            var courseId = $(this).data('corso-id');
-            var courseTitle = $(this).data('corso-title');
-            $('#modalCourseId').val(courseId);
-            $('#modalCourseTitle').text("Invita a: " + courseTitle);
-            $('#inviteEmails').val('');
-            $('#inviteResponse').html('');
-            $('#inviteModal, #modalBackdrop').show();
-        });
-        // Chiudi modale
-        $('#closeModal, #modalBackdrop').on('click', function() {
-            $('#inviteModal, #modalBackdrop').hide();
-        });
+       
+       
 
         $('#openScrivaniaModal').on('click', function() {
             $.post(ajaxurl, {

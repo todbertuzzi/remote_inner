@@ -11,7 +11,7 @@ add_shortcode('menu_profilo_utente', function () {
         <div class="user-dropdown">
             <span class="user-name">Ciao, <?php echo esc_html($user->display_name); ?> ⬇</span>
             <ul class="user-menu">
-                <li><a href="<?php echo esc_url(site_url('/dashboard/')); ?>">Dashboard</a></li>
+                <li><a href="<?php echo esc_url(site_url('/dashboard-utente/')); ?>">Dashboard</a></li>
                 <li><a href="#">Gestione Inviti</a></li>
                 <li><a href="<?php echo esc_url(wp_logout_url(home_url())); ?>">Esci</a></li>
             </ul>

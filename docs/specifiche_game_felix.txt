@@ -1,0 +1,96 @@
+📄 Specifiche implementazione inviti WordPress per gioco multiplayer Unity3D con Relay
+🎯 Obiettivo
+Permettere a un utente pagante sulla piattaforma WordPress di:
+Selezionare un gioco Unity (WebGL) disponibile
+Invitare fino a 3 utenti registrati
+Avviare una sessione multiplayer in tempo reale usando Unity Relay
+Gestire tutto il flusso tramite WordPress, senza dipendenze da Unity Lobby
+
+🧩 Componenti principali
+
+
+📦 Struttura dati (DB)
+Tabella: wp_game_sessions
+
+
+Tabella: wp_game_session_invites
+
+
+🔗 Link invito
+Ogni sessione genera un link del tipo:
+
+https://miosito.it/gioca?invito=56fb1d23-aa22-4ed3-910b-8c29ab763111
+Solo:
+L’host (creatore)
+Gli invitati specificati
+possono accedere al gioco via questo link (autenticazione WP obbligatoria).
+
+⚙️ Flusso d’uso
+🟢 Creazione sessione (host)
+L’utente paga o ha diritto a giocare
+Seleziona un gioco Unity
+Sceglie fino a 3 utenti da una rubrica (autocomplete WP)
+Clicca “Crea partita”
+WordPress:
+Registra la sessione (wp_game_sessions)
+Registra gli invitati (wp_game_session_invites)
+Genera link univoco
+L’interfaccia mostra il link da condividere
+
+🟡 Avvio sessione (Unity host)
+L’host apre il link da loggato
+WordPress verifica che è l’host → carica Unity WebGL
+Unity crea Relay Allocation (es. per 3 peer)
+Unity ottiene joinCode → lo invia a WP via:POST /wp-json/game/v1/set-join-code
+{ invito_uuid: "...", joinCode: "XYZ123" }
+
+
+🔵 Accesso invitati
+L’invitato apre il link da loggato
+WordPress verifica che è nella lista → carica Unity WebGL
+Unity inizia a fare polling:GET /wp-json/game/v1/get-join-code?invito_uuid=...
+→ finché non riceve joinCode
+Unity si connette a Relay con il codice
+
+🔄 API REST (WordPress → Unity)
+GET /wp-json/game/v1/get-join-code
+Input: invito_uuidOutput:
+
+{
+  "status": "ok",
+  "joinCode": "XYZ123",
+  "isGuest": true,
+  "guestId": 123
+}
+
+POST /wp-json/game/v1/set-join-code
+Input:
+
+{
+  "invito_uuid": "56fb1d23-aa22-...",
+  "joinCode": "XYZ123"
+}
+Autenticazione: host loggatoEffetto: aggiorna la sessione
+
+🔐 Sicurezza
+Tutti gli accessi richiedono current_user loggato
+Verifiche su:
+is_host → può inviare joinCode
+is_invited_user → può accedere al gioco
+I link di invito sono non condivisibili con utenti non autorizzati
+
+⏳ Timeout e gestione errori
+
+
+🔧 Estensioni future (opzionali)
+Notifiche email agli invitati
+Pannello “Le mie partite” per host e guest
+Riconnessione a sessioni attive
+Chat pre-partita
+Statistiche post-partita
+
+✅ Requisiti minimi sistema
+
+
+
+	

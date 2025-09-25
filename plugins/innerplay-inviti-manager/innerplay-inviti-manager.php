@@ -9,6 +9,105 @@
 
 if (!defined('ABSPATH')) exit;
 
+// MIGRAZIONE: tabella sessioni di gioco + collegamento inviti
+function gim_install_game_sessions_schema() {
+    global $wpdb;
+    $charset_collate = $wpdb->get_charset_collate();
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+    // 1) Crea/aggiorna tabella sessioni di gioco
+    $table_sessions = $wpdb->prefix . 'game_sessions';
+    $sql_sessions = "CREATE TABLE {$table_sessions} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        host_user_id BIGINT UNSIGNED NOT NULL,
+        gioco_id BIGINT UNSIGNED NOT NULL,
+        invito_uuid CHAR(36) NOT NULL,
+        join_code VARCHAR(64) NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'created',
+        created_at DATETIME NOT NULL,
+        expires_at DATETIME NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY invito_uuid (invito_uuid),
+        KEY host_user_id (host_user_id),
+        KEY gioco_id (gioco_id),
+        KEY expires_at (expires_at)
+    ) {$charset_collate};";
+    dbDelta($sql_sessions);
+
+    // 2) Adegua tabella inviti gioco (riuso)
+    $table_inviti_gioco = $wpdb->prefix . 'giochi_invitati';
+
+    // session_id
+    $col_session = $wpdb->get_var($wpdb->prepare(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'session_id'",
+        $table_inviti_gioco
+    ));
+    if (!$col_session) {
+        $wpdb->query("ALTER TABLE {$table_inviti_gioco} ADD COLUMN session_id BIGINT UNSIGNED NULL DEFAULT NULL");
+        $wpdb->query("ALTER TABLE {$table_inviti_gioco} ADD KEY session_id (session_id)");
+    }
+
+    // utente_id (binding dell’invitato dopo il primo accesso)
+    $col_user = $wpdb->get_var($wpdb->prepare(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'utente_id'",
+        $table_inviti_gioco
+    ));
+    if (!$col_user) {
+        $wpdb->query("ALTER TABLE {$table_inviti_gioco} ADD COLUMN utente_id BIGINT UNSIGNED NULL DEFAULT NULL");
+        $wpdb->query("ALTER TABLE {$table_inviti_gioco} ADD KEY utente_id (utente_id)");
+    }
+
+    // created_at
+    $col_created = $wpdb->get_var($wpdb->prepare(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'created_at'",
+        $table_inviti_gioco
+    ));
+    if (!$col_created) {
+        $wpdb->query("ALTER TABLE {$table_inviti_gioco} ADD COLUMN created_at DATETIME NULL DEFAULT NULL");
+        $wpdb->query("UPDATE {$table_inviti_gioco} SET created_at = NOW() WHERE created_at IS NULL");
+    }
+
+    // indice su invitato_email (usato per binding)
+    $has_email_idx = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'invitato_email'",
+        $table_inviti_gioco
+    ));
+    if (intval($has_email_idx) === 0) {
+        $wpdb->query("ALTER TABLE {$table_inviti_gioco} ADD KEY invitato_email (invitato_email)");
+    }
+
+    // Deprecazione legacy "token": rendi nullable e rimuovi eventuale indice univoco
+    $tokenCol = $wpdb->get_row($wpdb->prepare(
+        "SELECT COLUMN_NAME, IS_NULLABLE
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'token'",
+        $table_inviti_gioco
+    ));
+    if ($tokenCol) {
+        if ($tokenCol->IS_NULLABLE !== 'YES') {
+            $wpdb->query("ALTER TABLE {$table_inviti_gioco} MODIFY COLUMN token VARCHAR(191) NULL DEFAULT NULL");
+        }
+        $tokenUniqueIdx = $wpdb->get_row($wpdb->prepare(
+            "SELECT INDEX_NAME
+             FROM INFORMATION_SCHEMA.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = 'token' AND NON_UNIQUE = 0
+             LIMIT 1",
+            $table_inviti_gioco
+        ));
+        if ($tokenUniqueIdx && !empty($tokenUniqueIdx->INDEX_NAME)) {
+            $idx = esc_sql($tokenUniqueIdx->INDEX_NAME);
+            $wpdb->query("ALTER TABLE {$table_inviti_gioco} DROP INDEX `{$idx}`");
+        }
+    }
+}
+register_activation_hook(__FILE__, 'gim_install_game_sessions_schema');
+
+
+
 /**
  * Funzione AJAX per inviare inviti al Tool Scrivania.
  *
@@ -20,7 +119,8 @@ if (!defined('ABSPATH')) exit;
  * Chiamata da JavaScript con `action: 'attiva_scrivania'`
  * dalla modale dedicata nel frontend della dashboard utente.
  */
-add_action('wp_ajax_attiva_scrivania', 'gim_attiva_scrivania');
+remove_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
+add_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
 function gim_attiva_scrivania() {
     if (!is_user_logged_in()) {
         wp_send_json_error('Utente non loggato.');
@@ -73,88 +173,114 @@ function gim_attiva_scrivania() {
     echo "<div style='color:green;'>Inviti inviati: $sent</div>";
     wp_die();
 }
-
+add_action('wp_ajax_attiva_scrivania', 'gim_attiva_scrivania');
 /**
- * Funzione AJAX per inviare inviti a un gioco.
+ * Funzione AJAX per inviare inviti a un gioco (nuovo flusso basato su UUID).
  *
- * - Controlla il livello di abbonamento dell'utente.
- * - Per utenti Welcome, limita a un massimo di 3 giochi attivati.
- * - Salva ogni invito nella tabella `wp_giochi_invitati` con token univoco.
- * - Invia un'email all'invitato con link personalizzato contenente il token.
- * 
- * Chiamata tramite AJAX con `action: 'attiva_gioco'` dalla modale di invito.
+ * Input (POST):
+ * - gioco_id: ID del post 'gioco'
+ * - email_destinatario[]: elenco email dei contatti
+ *
+ * Logica:
+ * - Richiede utente loggato.
+ * - Valida il post 'gioco'.
+ * - Sanifica e limita a massimo 3 email per sessione.
+ * - Crea una sessione in wp_game_sessions con invito_uuid unico e stato 'created'.
+ * - Collega gli invitati in wp_giochi_invitati impostando session_id (senza usare il token legacy).
+ * - Invia email agli invitati con link: /gioca?invito={invito_uuid}.
+ * - Risponde con HTML contenente esito e link host da condividere.
+ *
+ * Note:
+ * - Riuso tabella inviti: wp_giochi_invitati (con colonna session_id).
+ * - Il campo 'token' è deprecato e non più valorizzato.
+ * - Il join_code viene impostato dall’host via REST: POST /wp-json/game/v1/set-join-code.
  */
 add_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
 
 function gim_attiva_gioco() {
     if (!is_user_logged_in()) {
-        wp_send_json_error('Non sei loggato.');
-    }
-
-    $current_user = wp_get_current_user();
-    $user_id = $current_user->ID;
-    $gioco_id = intval($_POST['gioco_id']);
-    $emails = $_POST['email_destinatario'] ?? [];
-
-    if (!is_array($emails)) {
-        $emails = explode(',', $emails);
-    }
-
-    $emails = array_filter(array_map('sanitize_email', $emails));
-
-    if (empty($emails)) {
-        echo '<div style="color:red;">Nessuna email valida inserita.</div>';
+        echo '<div style="color:red;">Devi essere loggato.</div>';
         wp_die();
     }
 
+    $gioco_id = isset($_POST['gioco_id']) ? intval($_POST['gioco_id']) : 0;
+    $emails   = isset($_POST['email_destinatario']) ? (array) $_POST['email_destinatario'] : [];
+
+    if ($gioco_id <= 0 || empty($emails)) {
+        echo '<div style="color:red;">Dati mancanti: seleziona un gioco e almeno un contatto.</div>';
+        wp_die();
+    }
+
+    // Verifica post "gioco"
+    $gioco = get_post($gioco_id);
+    if (!$gioco || $gioco->post_type !== 'gioco' || $gioco->post_status !== 'publish') {
+        echo '<div style="color:red;">Gioco non valido.</div>';
+        wp_die();
+    }
+
+    // Sanifica e limita a 3
+    $emails = array_values(array_unique(array_filter(array_map('sanitize_email', $emails))));
+    if (empty($emails)) {
+        echo '<div style="color:red;">Nessuna email valida.</div>';
+        wp_die();
+    }
+    if (count($emails) > 3) {
+        $emails = array_slice($emails, 0, 3);
+    }
+
     global $wpdb;
+    $table_sessions = $wpdb->prefix . 'game_sessions';
+    $table_inviti   = $wpdb->prefix . 'giochi_invitati';
 
-    $membership = function_exists('pmpro_getMembershipLevelForUser')
-        ? pmpro_getMembershipLevelForUser($user_id)
-        : null;
+    $host_id = get_current_user_id();
+    $invito_uuid = wp_generate_uuid4();
 
-    $table = $wpdb->prefix . 'giochi_invitati';
+    $ttl_seconds = 24 * 3600; // 24h
+    $now_ts = current_time('timestamp');
+    $expires_at = date('Y-m-d H:i:s', $now_ts + $ttl_seconds);
 
-    // Limite per Welcome
-    if ($membership && strtolower($membership->name) === 'welcome') {
-        $attivi = $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM $table WHERE invitante_id = %d",
-            $user_id
-        ));
+   // Crea sessione
+    $ins = $wpdb->insert($table_sessions, [
+        'host_user_id' => $host_id,
+        'gioco_id'     => $gioco_id,
+        'invito_uuid'  => $invito_uuid,
+        'status'       => 'created',
+        'created_at'   => current_time('mysql'),
+        'expires_at'   => $expires_at,
+    ], ['%d','%d','%s','%s','%s','%s']);
 
-        $max = 3 - intval($attivi);
-        if ($max <= 0) {
-            echo '<div style="color:red;">Hai già raggiunto il limite massimo di 3 giochi attivi.</div>';
-            wp_die();
-        }
-
-        $emails = array_slice($emails, 0, $max);
+    if ($ins === false) {
+        echo '<div style="color:red;">Errore creazione sessione.</div>';
+        wp_die();
     }
 
-    $inserted = 0;
+    $session_id = (int) $wpdb->insert_id;
+
+    // Inserisci invitati
+    $inviati = 0;
     foreach ($emails as $email) {
-        $token = wp_generate_password(16, false);
-
-        $wpdb->insert($table, [
-            'gioco_id' => $gioco_id,
-            'invitante_id' => $user_id,
+        $ok = $wpdb->insert($table_inviti, [
+            'invitante_id'   => $host_id,
             'invitato_email' => $email,
-            'tipo_abbonamento' => $membership ? $membership->name : 'N/A',
-            'token' => $token
-        ]);
+            'session_id'     => $session_id,
+            'created_at'     => current_time('mysql'),
+        ], ['%d','%s','%d','%s']);
 
-        // Prepara email
-        $subject = 'Hai ricevuto un invito a un gioco!';
-        $link = home_url('/invito-gioco/?token=' . $token);
-        $body = 'Ciao! Hai ricevuto un invito a partecipare a un gioco. Clicca qui per accedere: <a href="' . esc_url($link) . '">' . esc_html($link) . '</a>';
-        $headers = ['Content-Type: text/html; charset=UTF-8'];
-
-        wp_mail($email, $subject, $body, $headers);
-
-        $inserted++;
+        if ($ok !== false) {
+            $link = add_query_arg(['invito' => $invito_uuid], home_url('/gioca'));
+            wp_mail(
+                $email,
+                'Sei stato invitato a giocare',
+                'Clicca per entrare in partita: ' . esc_url($link),
+                ['Content-Type: text/plain; charset=UTF-8']
+            );
+            $inviati++;
+        }
     }
 
-    echo "<div style='color:green;'>Inviti inviati: $inserted</div>";
+    $link_host = add_query_arg(['invito' => $invito_uuid], home_url('/gioca'));
+    echo '<div style="color:green;">Partita creata. Invitati: ' . intval($inviati) . '</div>';
+    echo '<div>Link da condividere: <a href="' . esc_url($link_host) . '" target="_blank">' . esc_html($link_host) . '</a></div>';
     wp_die();
 }
 
