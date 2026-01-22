@@ -20,12 +20,13 @@ Tabella: wp_game_session_invites
 Ogni sessione genera un link del tipo:
 
 https://miosito.it/gioca?invito=56fb1d23-aa22-4ed3-910b-8c29ab763111
-Solo:
-L’host (creatore)
-Gli invitati specificati
-possono accedere al gioco via questo link (autenticazione WP obbligatoria).
+// Accesso consentito solo a host e utenti invitati (login WP obbligatorio).
+
 
 ⚙️ Flusso d’uso
+WordPress:
+- Registra la sessione (wp_game_sessions) con invito_uuid e expires_at = now+24h
+- Registra gli invitati (riuso wp_giochi_invitati, con session_id)
 🟢 Creazione sessione (host)
 L’utente paga o ha diritto a giocare
 Seleziona un gioco Unity
@@ -38,49 +39,80 @@ Genera link univoco
 L’interfaccia mostra il link da condividere
 
 🟡 Avvio sessione (Unity host)
+
 L’host apre il link da loggato
 WordPress verifica che è l’host → carica Unity WebGL
 Unity crea Relay Allocation (es. per 3 peer)
-Unity ottiene joinCode → lo invia a WP via:POST /wp-json/game/v1/set-join-code
+Unity ottiene joinCode →  Unity invia a WP:
+POST /wp-json/game/v1/set-join-code
 { invito_uuid: "...", joinCode: "XYZ123" }
+Effetto:
+- Aggiorna join_code
+- status = "started"
+- Estende expires_at di +2h (finestra runtime)
+
+// TEST -> 
+// Esegui dal contesto della pagina del gioco (dove vedi UNITY_NONCE e INVITO_UUID)
+fetch('/wp-json/game/v1/set-join-code', {
+  method: 'POST',
+  headers: {'Content-Type':'application/json','X-WP-Nonce': UNITY_NONCE},
+  body: JSON.stringify({ invito_uuid: INVITO_UUID, joinCode: 'ABC123' })
+}).then(r=>r.json()).then(console.log)
 
 
 🔵 Accesso invitati
 L’invitato apre il link da loggato
 WordPress verifica che è nella lista → carica Unity WebGL
-Unity inizia a fare polling:GET /wp-json/game/v1/get-join-code?invito_uuid=...
+Unity effettua polling:
+GET /wp-json/game/v1/get-join-code?invito_uuid=...
+Header: X-WP-Nonce (wp_rest)
 → finché non riceve joinCode
 Unity si connette a Relay con il codice
 
 🔄 API REST (WordPress → Unity)
 GET /wp-json/game/v1/get-join-code
-Input: invito_uuidOutput:
-
-{
-  "status": "ok",
-  "joinCode": "XYZ123",
-  "isGuest": true,
-  "guestId": 123
-}
+- Input: invito_uuid
+- Output:
+  {
+    "status": "ok",
+    "joinCode": "XYZ123" | null,
+    "isGuest": true|false,
+    "guestId": 123
+  }
+- Errori possibili: 401 auth_required, 403 forbidden, 404 session_not_found, 410 expired
 
 POST /wp-json/game/v1/set-join-code
-Input:
+- Input:
+  { "invito_uuid": "...", "joinCode": "XYZ123" }
+- Autenticazione: host loggato
+- Errori possibili: 401, 403, 404, 410, 500
 
-{
-  "invito_uuid": "56fb1d23-aa22-...",
-  "joinCode": "XYZ123"
-}
-Autenticazione: host loggatoEffetto: aggiorna la sessione
+Autenticazione: host loggato Effetto: aggiorna la sessione
 
 🔐 Sicurezza
+- Login obbligatorio
+- Verifiche:
+  - is_host → può inviare joinCode
+  - is_invited_user → può accedere
+- Gating applicato sia su /gioca (page-gioca.php) sia sul singolo gioco (single-gioco.php)
+- Link non condivisibili con utenti non autorizzati
 Tutti gli accessi richiedono current_user loggato
 Verifiche su:
 is_host → può inviare joinCode
 is_invited_user → può accedere al gioco
-I link di invito sono non condivisibili con utenti non autorizzati
 
-⏳ Timeout e gestione errori
+⏳ Scadenza inviti/sessioni
+- expires_at impostato alla creazione (+24h)
+- API e pagine rifiutano accesso se scaduta (HTTP 410)
+- Alla chiamata set-join-code, la scadenza viene estesa di +2h per la durata della sessione
 
+🎛️ Limiti
+- Massimo 3 invitati per sessione (enforced lato server)
+
+📌 Deviazioni progettuali rispetto al disegno iniziale
+- Tabella inviti dedicata (wp_game_session_invites) non creata:
+  si riusa wp_giochi_invitati aggiungendo session_id, indici e binding utente_id
+- Legacy “token” per i Giochi: rimosso (campo mantenuto nullable per compatibilità schema)
 
 🔧 Estensioni future (opzionali)
 Notifiche email agli invitati
@@ -90,6 +122,10 @@ Chat pre-partita
 Statistiche post-partita
 
 ✅ Requisiti minimi sistema
+
+📝 Changelog
+- 2025-09-25: introdotta scadenza inviti (expires_at), estensione +2h su set-join-code, limite 3 invitati per sessione, gating doppio; documentato riuso wp_giochi_invitati e deprecazione token
+
 
 
 
