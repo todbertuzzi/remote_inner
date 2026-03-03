@@ -111,7 +111,22 @@ function crea_corsi_fake_tutor_lms() {
 function ipt_login_redirect_dashboard($redirect_to, $request, $user) {
     // Controlla che l'utente sia loggato correttamente
     if (isset($user->roles) && is_array($user->roles)) {
-        // Reindirizza alla pagina dashboard personalizzata
+        // Se WordPress ha già calcolato un redirect valido (es. flusso invito/tool), rispettalo.
+        // Nota: wp_login_form passa 'redirect', che finisce in redirect_to.
+        $validated_redirect = wp_validate_redirect($redirect_to, '');
+        if (!empty($validated_redirect)) {
+            $path = wp_parse_url($validated_redirect, PHP_URL_PATH);
+            $query = wp_parse_url($validated_redirect, PHP_URL_QUERY);
+
+            $is_invite_flow = (!empty($path) && (strpos($path, '/invito-scrivania') !== false || strpos($path, '/tool-scrivania') !== false));
+            $has_token_query = (!empty($query) && strpos($query, 'token=') !== false);
+
+            if ($is_invite_flow || $has_token_query) {
+                return $validated_redirect;
+            }
+        }
+
+        // Default: reindirizza alla pagina dashboard personalizzata
         return site_url('/dashboard-utente');
     }
     return $redirect_to;
@@ -191,6 +206,74 @@ add_filter('manage_users_custom_column', function($value, $column_name, $user_id
     }
     return $value;
 }, 10, 3);
+
+/**
+ * Evita warning/errori CORS per font Elementor caricati da un dominio diverso.
+ * Lo facciamo SOLO su /tool-scrivania per non impattare il resto del sito.
+ */
+add_action('wp_enqueue_scripts', function () {
+    if (is_admin()) {
+        return;
+    }
+
+    // Siamo sul tool? (supporta sia slug pagina sia template)
+    $is_tool = is_page('tool-scrivania') || is_page_template('tool-scrivania.php');
+    if (!$is_tool) {
+        return;
+    }
+
+    global $wp_styles;
+    if (empty($wp_styles) || empty($wp_styles->queue) || !is_array($wp_styles->queue)) {
+        return;
+    }
+
+    foreach ($wp_styles->queue as $handle) {
+        if (empty($wp_styles->registered[$handle]) || empty($wp_styles->registered[$handle]->src)) {
+            continue;
+        }
+
+        $src = (string) $wp_styles->registered[$handle]->src;
+        // Match su font Elementor self-hosted (uploads/elementor/google-fonts).
+        if (strpos($src, 'uploads/elementor/google-fonts') !== false || strpos($src, 'elementor/google-fonts') !== false) {
+            wp_dequeue_style($handle);
+        }
+    }
+}, 999);
+
+/**
+ * Tutor LMS (tutor.js / tutor-front.js) su alcune pagine frontend assume che esista `window.wp.i18n`.
+ * Sul tool scrivania non ci serve: lo rimuoviamo per evitare errori console e side-effect.
+ */
+add_action('wp_enqueue_scripts', function () {
+    if (is_admin()) {
+        return;
+    }
+
+    $is_tool = is_page('tool-scrivania') || is_page_template('tool-scrivania.php');
+    if (!$is_tool) {
+        return;
+    }
+
+    global $wp_scripts;
+    if (empty($wp_scripts) || empty($wp_scripts->queue) || !is_array($wp_scripts->queue)) {
+        return;
+    }
+
+    foreach ($wp_scripts->queue as $handle) {
+        if (empty($wp_scripts->registered[$handle]) || empty($wp_scripts->registered[$handle]->src)) {
+            continue;
+        }
+
+        $src = (string) $wp_scripts->registered[$handle]->src;
+        $is_tutor = (strpos($src, 'tutor') !== false);
+        $is_tutor_js = (strpos($src, 'tutor.js') !== false || strpos($src, 'tutor-front.js') !== false);
+
+        if ($is_tutor && $is_tutor_js) {
+            wp_dequeue_script($handle);
+            wp_deregister_script($handle);
+        }
+    }
+}, 999);
 
 /* Per permettere le richieste cross-origin dal gioco Unity, aggiungi gli header CORS in WordPress: */
 add_action('init', function() {

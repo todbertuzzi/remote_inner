@@ -1,0 +1,16 @@
+{
+  "name": "innerplay/scrivania-collaborativa-api",
+  "description": "Scrivania collaborativa API (WordPress plugin)",
+  "type": "project",
+  "require": {
+    "pusher/pusher-php-server": "^7.2"
+  },
+  "config": {
+    "platform": {
+      "php": "7.4.0"
+    },
+    "optimize-autoloader": true,
+    "preferred-install": "dist",
+    "sort-packages": true
+  }
+}

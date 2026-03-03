@@ -4,10 +4,71 @@
  */
 class Scrivania_Ajax {
     /**
+     * Ritorna un host "sicuro" per costruire URL assoluti coerenti con i cookie.
+     * Se l'host corrente è equivalente a home/site (es. www/non-www), usa quello.
+     */
+    private static function get_safe_request_host() {
+        $home_host = wp_parse_url(home_url('/'), PHP_URL_HOST);
+        $site_host = wp_parse_url(site_url('/'), PHP_URL_HOST);
+
+        $raw = isset($_SERVER['HTTP_HOST']) ? (string) $_SERVER['HTTP_HOST'] : '';
+        $raw = strtolower(preg_replace('/:\\d+$/', '', $raw));
+
+        $allowed = array_filter(array_map('strtolower', array($home_host, $site_host)));
+        $normalize = function ($h) {
+            return preg_replace('/^www\\./', '', (string) $h);
+        };
+
+        if (!empty($raw)) {
+            if (in_array($raw, $allowed, true)) {
+                return $raw;
+            }
+            $raw_n = $normalize($raw);
+            foreach ($allowed as $h) {
+                if ($raw_n === $normalize($h)) {
+                    return $raw;
+                }
+            }
+        }
+
+        return !empty($home_host) ? $home_host : $site_host;
+    }
+
+    /**
+     * Costruisce una URL assoluta usando l'host corrente (se compatibile) per evitare mismatch www/non-www.
+     */
+    private static function build_url_on_request_host($path_with_query) {
+        $scheme = is_ssl() ? 'https' : 'http';
+        $host = self::get_safe_request_host();
+        $path_with_query = '/' . ltrim((string) $path_with_query, '/');
+        return $scheme . '://' . $host . $path_with_query;
+    }
+
+    /**
      * Inizializza le funzioni AJAX
      */
     public static function init() {
         add_action('wp_ajax_attiva_scrivania', [self::class, 'attiva_scrivania']);
+        add_action('wp_ajax_scrivania_rest_nonce', [self::class, 'rest_nonce']);
+        // Se per qualsiasi motivo i cookie non arrivano (cache/CDN/domain mismatch),
+        // evita la risposta default "0" e torna un JSON chiaro.
+        add_action('wp_ajax_nopriv_scrivania_rest_nonce', [self::class, 'rest_nonce']);
+    }
+
+    /**
+     * Ritorna un nonce REST fresco per l'utente loggato.
+     * Utile quando una cache serve HTML con nonce "stale" (rest_cookie_invalid_nonce).
+     */
+    public static function rest_nonce() {
+        if (!is_user_logged_in()) {
+            wp_send_json_error(array('message' => 'Utente non loggato'), 401);
+            wp_die();
+        }
+
+        wp_send_json_success(array(
+            'nonce' => wp_create_nonce('wp_rest'),
+        ));
+        wp_die();
     }
     
     /**
@@ -19,8 +80,15 @@ class Scrivania_Ajax {
             return;
         }
 
+        global $wpdb;
+
         $user_id = get_current_user_id();
-        $emails = isset($_POST['email_destinatario']) ? (array)$_POST['email_destinatario'] : [];
+        $raw_emails = $_POST['email_destinatario'] ?? [];
+        if (is_string($raw_emails)) {
+            $emails = preg_split('/[\s,;]+/', $raw_emails, -1, PREG_SPLIT_NO_EMPTY);
+        } else {
+            $emails = (array) $raw_emails;
+        }
         $data = isset($_POST['data_invito']) ? sanitize_text_field($_POST['data_invito']) : '';
         $ora = isset($_POST['ora_invito']) ? sanitize_text_field($_POST['ora_invito']) : '';
 
@@ -40,7 +108,6 @@ class Scrivania_Ajax {
             $membership = pmpro_getMembershipLevelForUser($user_id);
             
             if ($membership && strtolower($membership->name) === 'welcome') {
-                global $wpdb;
                 $table = $wpdb->prefix . 'scrivania_sessioni';
                 $sessioni = $wpdb->get_var($wpdb->prepare(
                     "SELECT COUNT(*) FROM $table WHERE creatore_id = %d",
@@ -61,21 +128,67 @@ class Scrivania_Ajax {
             wp_die();
         }
 
-        global $wpdb;
+        // Link diretto per l'invitante (token sessione)
+        $session_link = '';
+        $session_token = '';
+        $session_creator_id = 0;
+        try {
+            $sessions_table = $wpdb->prefix . 'scrivania_sessioni';
+            $session_token = $wpdb->get_var($wpdb->prepare(
+                "SELECT token FROM {$sessions_table} WHERE id = %d",
+                intval($session_id)
+            ));
+            $session_creator_id = intval($wpdb->get_var($wpdb->prepare(
+                "SELECT creatore_id FROM {$sessions_table} WHERE id = %d",
+                intval($session_id)
+            )));
+            if (!empty($session_token)) {
+                $session_link = self::build_url_on_request_host('/tool-scrivania/?token=' . urlencode($session_token));
+            }
+        } catch (Throwable $e) {
+            // no-op: manteniamo compatibilità anche se qualcosa va storto
+        }
+
         $table = $wpdb->prefix . 'scrivania_invitati';
         $sent = 0;
+
+        // Cache colonne per compatibilità schema legacy
+        $columns = $wpdb->get_col("DESC {$table}", 0);
 
         foreach ($emails as $email) {
             $token = wp_generate_password(16, false);
 
-            $wpdb->insert($table, [
+            // Pre-bind se l'utente esiste già
+            $existing_user = get_user_by('email', $email);
+            $invitato_user_id = $existing_user ? intval($existing_user->ID) : null;
+
+            // Hash token (non rimuoviamo il token in chiaro per compatibilità V1)
+            $token_hash = hash_hmac('sha256', $token, wp_salt('auth'));
+
+            $insert = [
                 'sessione_id' => $session_id,
                 'token' => $token,
                 'invitante_id' => $user_id,
                 'invitato_email' => $email,
                 'data_invito' => $data,
-                'ora_invito' => $ora
-            ]);
+                'ora_invito' => $ora,
+                // Nuovi campi (se esistono nello schema)
+                'invitato_user_id' => $invitato_user_id,
+                'role' => 'viewer',
+                'status' => 'pending',
+                'token_hash' => $token_hash,
+                'last_sent_at' => current_time('mysql'),
+                'resend_count' => 0,
+            ];
+
+            // Rimuovi chiavi non supportate se la colonna non esiste (schema legacy)
+            foreach (array_keys($insert) as $key) {
+                if (!in_array($key, $columns, true)) {
+                    unset($insert[$key]);
+                }
+            }
+
+            $wpdb->insert($table, $insert);
 
             $link = home_url('/invito-scrivania/?token=' . $token);
             $subject = 'Invito al Tool Scrivania';
@@ -90,7 +203,32 @@ class Scrivania_Ajax {
             $sent++;
         }
 
-        echo "<div style='color:green;'>Inviti inviati: $sent</div>";
+        // Mail di riepilogo all'invitante con link diretto alla sessione (utile per copia/incolla)
+        $inviter = get_userdata($user_id);
+        $inviter_email = ($inviter && !empty($inviter->user_email)) ? $inviter->user_email : '';
+        if (!empty($inviter_email) && !empty($session_link)) {
+            $subject_owner = 'Link sessione Tool Scrivania (solo creatore)';
+            $body_owner =
+                '<p>Hai creato una sessione del Tool Scrivania.</p>' .
+                '<p><strong>Quando:</strong> ' . date_i18n('d/m/Y', strtotime($data)) . ' alle ' . esc_html($ora) . '</p>' .
+                '<p><strong>Dettagli tecnici:</strong> sessione ID ' . intval($session_id) . ' &middot; creatore ID ' . intval($session_creator_id ?: $user_id) . ' &middot; invitante ID ' . intval($user_id) . '</p>' .
+                '<p><strong>Link per accedere alla tua sessione (solo creatore):</strong><br />' .
+                '<a href="' . esc_url($session_link) . '">' . esc_html($session_link) . '</a></p>' .
+                '<p style="margin-top:12px; color:#555;">Nota: gli invitati devono entrare dal link <strong>/invito-scrivania/?token=...</strong> ricevuto nella loro email (non da questo link).</p>' .
+                '<p><strong>Inviti inviati:</strong> ' . intval($sent) . '</p>';
+            $headers_owner = ['Content-Type: text/html; charset=UTF-8'];
+            wp_mail($inviter_email, $subject_owner, $body_owner, $headers_owner);
+        }
+
+        echo "<div style='color:green; font-weight:600;'>Inviti inviati: " . intval($sent) . "</div>";
+        echo "<div style='margin-top:6px; color:#444;'>Stai invitando come utente ID " . intval($user_id) . "</div>";
+        echo "<div style='margin-top:2px; color:#444;'>Sessione ID " . intval($session_id) . " &middot; Creatore ID " . intval($session_creator_id ?: $user_id) . "</div>";
+        if (!empty($session_link)) {
+            echo "<div style='margin-top:10px;'><strong>Link per accedere alla sessione (solo creatore):</strong><br /><a href='" . esc_url($session_link) . "' target='_blank' rel='noopener noreferrer'>" . esc_html($session_link) . "</a></div>";
+            echo "<div style='margin-top:6px; color:#666;'>Gli invitati entreranno invece dal loro link <strong>/invito-scrivania/?token=...</strong>.</div>";
+        } else {
+            echo "<div style='margin-top:10px; color:#666;'>Link sessione non disponibile: apri <a href='" . esc_url(home_url('/tool-scrivania/')) . "' target='_blank' rel='noopener noreferrer'>Tool Scrivania</a> (sei il creatore).</div>";
+        }
         wp_die();
     }
     

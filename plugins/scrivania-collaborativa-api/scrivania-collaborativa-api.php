@@ -39,26 +39,18 @@ if (file_exists(plugin_dir_path(__FILE__) . 'includes/class-scrivania-ajax.php')
 if (!class_exists('\\Pusher\\Pusher')) {
     class Pusher_Loader {
         public static function initialize() {
-            // Check if Pusher files exist
-            $pusher_file = plugin_dir_path(__FILE__) . 'vendor/pusher/pusher-php-server/src/Pusher.php';
-            
-            if (file_exists($pusher_file)) {
-                // If Pusher exists, load the classes
-                if (file_exists(plugin_dir_path(__FILE__) . 'vendor/autoload.php')) {
-                    require_once plugin_dir_path(__FILE__) . 'vendor/autoload.php';
-                } else {
-                    // Manual loading of essential Pusher files
-                    $base_path = plugin_dir_path(__FILE__) . 'vendor/pusher/pusher-php-server/src/';
-                    $files = ['Pusher.php', 'PusherException.php', 'PusherInterface.php', 'PusherCrypto.php', 'ApiErrorException.php', 'Webhook.php'];
-                    
-                    foreach ($files as $file) {
-                        if (file_exists($base_path . $file)) {
-                            require_once $base_path . $file;
-                        }
-                    }
-                }
-                return true;
+            $plugin_path = plugin_dir_path(__FILE__);
+
+            // Carica Pusher SOLO se abbiamo un vendor Composer completo.
+            // Il file Pusher.php moderno dipende da PSR Log + Guzzle: includerlo “a mano”
+            // senza vendor completo può causare fatal error (errore critico WordPress).
+            $composer_marker = $plugin_path . 'vendor/composer/autoload_real.php';
+            $autoload = $plugin_path . 'vendor/autoload.php';
+            if (file_exists($composer_marker) && file_exists($autoload)) {
+                require_once $autoload;
+                return class_exists('\\Pusher\\Pusher');
             }
+
             return false;
         }
     }
@@ -71,6 +63,7 @@ if (!class_exists('\\Pusher\\Pusher')) {
  * Main plugin class that handles the initialization
  */
 class Scrivania_Collaborativa_API_Loader {
+    const DB_VERSION = 2;
     /**
      * Plugin instance
      */
@@ -93,8 +86,83 @@ class Scrivania_Collaborativa_API_Loader {
         // Add activation hook
         register_activation_hook(__FILE__, [$this, 'activate']);
         
+        // Run schema upgrades early
+        add_action('plugins_loaded', [$this, 'maybe_upgrade_schema'], 1);
+
         // Initialize the plugin
         add_action('plugins_loaded', [$this, 'init']);
+    }
+
+    /**
+     * Upgrade DB schema if needed.
+     */
+    public function maybe_upgrade_schema() {
+        $current = intval(get_option('scrivania_db_version', 1));
+        if ($current >= self::DB_VERSION) {
+            return;
+        }
+
+        global $wpdb;
+        $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
+        $table_invites = $wpdb->prefix . 'scrivania_invitati';
+
+        // Helper: add column if missing
+        $column_exists = function ($table_name, $column_name) use ($wpdb) {
+            $sql = $wpdb->prepare(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                $table_name,
+                $column_name
+            );
+            return intval($wpdb->get_var($sql)) > 0;
+        };
+
+        // Helper: add index if missing (by name)
+        $index_exists = function ($table_name, $index_name) use ($wpdb) {
+            $sql = $wpdb->prepare(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s",
+                $table_name,
+                $index_name
+            );
+            return intval($wpdb->get_var($sql)) > 0;
+        };
+
+        // Sessions: state_version
+        if (!$column_exists($table_sessions, 'state_version')) {
+            $wpdb->query("ALTER TABLE {$table_sessions} ADD COLUMN state_version BIGINT(20) UNSIGNED NOT NULL DEFAULT 1");
+        }
+
+        // Invites: user binding + role + status + timestamps + token hash + resend tracking
+        $invite_columns = [
+            'invitato_user_id' => "BIGINT(20) UNSIGNED NULL DEFAULT NULL",
+            'role' => "VARCHAR(20) NOT NULL DEFAULT 'viewer'",
+            'status' => "VARCHAR(20) NOT NULL DEFAULT 'pending'",
+            'verified_at' => "DATETIME NULL DEFAULT NULL",
+            'claimed_at' => "DATETIME NULL DEFAULT NULL",
+            'consumed_at' => "DATETIME NULL DEFAULT NULL",
+            'revoked_at' => "DATETIME NULL DEFAULT NULL",
+            'token_hash' => "CHAR(64) NULL DEFAULT NULL",
+            'last_sent_at' => "DATETIME NULL DEFAULT NULL",
+            'resend_count' => "SMALLINT(5) UNSIGNED NOT NULL DEFAULT 0",
+        ];
+
+        foreach ($invite_columns as $name => $ddl) {
+            if (!$column_exists($table_invites, $name)) {
+                $wpdb->query("ALTER TABLE {$table_invites} ADD COLUMN {$name} {$ddl}");
+            }
+        }
+
+        // Indexes
+        if (!$index_exists($table_invites, 'invitato_user_id')) {
+            $wpdb->query("ALTER TABLE {$table_invites} ADD KEY invitato_user_id (invitato_user_id)");
+        }
+        if (!$index_exists($table_invites, 'status')) {
+            $wpdb->query("ALTER TABLE {$table_invites} ADD KEY status (status)");
+        }
+        if (!$index_exists($table_invites, 'sessione_user')) {
+            $wpdb->query("ALTER TABLE {$table_invites} ADD KEY sessione_user (sessione_id, invitato_user_id)");
+        }
+
+        update_option('scrivania_db_version', self::DB_VERSION);
     }
     
     /**
@@ -163,6 +231,9 @@ class Scrivania_Collaborativa_API_Loader {
         add_option('scrivania_pusher_app_secret', '');
         add_option('scrivania_pusher_cluster', 'eu');
         add_option('scrivania_pusher_debug', '0');
+
+        // Mark DB version
+        update_option('scrivania_db_version', self::DB_VERSION);
     }
 }
 

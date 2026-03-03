@@ -1,6 +1,14 @@
 <?php
 /* Template Name: Dashboard Pro Membership */
 
+// Evita che plugin/cache CDN servano una pagina utente a un altro utente.
+if (!defined('DONOTCACHEPAGE')) {
+    define('DONOTCACHEPAGE', true);
+}
+if (function_exists('nocache_headers')) {
+    nocache_headers();
+}
+
 if (!is_user_logged_in()) {
     wp_redirect(wp_login_url());
     exit;
@@ -81,6 +89,11 @@ get_header(); ?>
 <main id="content" class="site-main">
     <div class="dashboard-pro">
         <h2>Gestione Abbonamento</h2>
+
+        <p style="margin: 0.5rem 0 1rem; color:#444;">
+            <strong>Sei loggato come:</strong>
+            <?php echo esc_html($current_user->user_email); ?> (ID <?php echo intval($current_user->ID); ?>)
+        </p>
 
         <div class="pmpro-membership-tabs">
             <button onclick="toggleTab('attivita')">📄 Attività</button>
@@ -262,7 +275,7 @@ get_header(); ?>
             }
             $.post(ajaxurl, {
                 action: 'attiva_scrivania',
-                email_destinatario: emails,
+                email_destinatario: emails.join(','),
                 data_invito: data,
                 ora_invito: ora
             }, function(response) {
@@ -297,7 +310,7 @@ get_header(); ?>
             $.post(ajaxurl, {
                 action: 'attiva_gioco',
                 gioco_id: giocoId,
-                email_destinatario: emails
+                email_destinatario: emails.join(',')
             }, function(response) {
                 $('#inviteResponse').html(response);
             });

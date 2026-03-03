@@ -121,13 +121,73 @@ register_activation_hook(__FILE__, 'gim_install_game_sessions_schema');
  */
 remove_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
 add_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
+
+if (!function_exists('gim_create_or_get_session')) {
+    /**
+     * Fallback: crea o recupera una sessione scrivania per l'utente.
+     * Nota: se il plugin Scrivania Collaborativa API è attivo, questo handler viene disabilitato.
+     */
+    function gim_create_or_get_session($user_id)
+    {
+        global $wpdb;
+
+        $table = $wpdb->prefix . 'scrivania_sessioni';
+
+        // Se la tabella non esiste, evita fatal e segnala errore.
+        $table_exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
+        if (empty($table_exists)) {
+            return false;
+        }
+
+        $session_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$table} WHERE creatore_id = %d ORDER BY id DESC LIMIT 1",
+            $user_id
+        ));
+        if (!empty($session_id)) {
+            return (int) $session_id;
+        }
+
+        $user = get_userdata($user_id);
+        $display_name = $user ? $user->display_name : 'utente';
+
+        $token = wp_generate_password(24, false);
+        $nome = 'Sessione di ' . $display_name;
+        $impostazioni = [
+            'attiva' => false,
+            'iniziata' => null,
+            'mazzoId' => 0,
+            'sfondo' => null,
+        ];
+
+        $ins = $wpdb->insert($table, [
+            'token' => $token,
+            'creatore_id' => $user_id,
+            'nome' => $nome,
+            'impostazioni' => wp_json_encode($impostazioni),
+            'creato_il' => current_time('mysql'),
+            'modificato_il' => current_time('mysql'),
+        ]);
+
+        if ($ins === false) {
+            return false;
+        }
+
+        return (int) $wpdb->insert_id;
+    }
+}
+
 function gim_attiva_scrivania() {
     if (!is_user_logged_in()) {
         wp_send_json_error('Utente non loggato.');
     }
-
     $user_id = get_current_user_id();
-    $emails = $_POST['email_destinatario'] ?? [];
+
+    $raw_emails = $_POST['email_destinatario'] ?? [];
+    if (is_string($raw_emails)) {
+        $emails = preg_split('/[\s,;]+/', $raw_emails, -1, PREG_SPLIT_NO_EMPTY);
+    } else {
+        $emails = (array) $raw_emails;
+    }
     $data = sanitize_text_field($_POST['data_invito'] ?? '');
     $ora = sanitize_text_field($_POST['ora_invito'] ?? '');
 
@@ -201,6 +261,14 @@ function gim_attiva_scrivania() {
     wp_die();
 }
 add_action('wp_ajax_attiva_scrivania', 'gim_attiva_scrivania');
+
+// Single source of truth: se è attivo il plugin Scrivania Collaborativa API,
+// la gestione inviti scrivania deve essere delegata a quel plugin (evita doppie mail/doppie insert).
+add_action('plugins_loaded', function () {
+    if (class_exists('Scrivania_Ajax')) {
+        remove_action('wp_ajax_attiva_scrivania', 'gim_attiva_scrivania');
+    }
+}, 20);
 /**
  * Funzione AJAX per inviare inviti a un gioco (nuovo flusso basato su UUID).
  *
@@ -232,7 +300,12 @@ function gim_attiva_gioco()
     }
 
     $gioco_id = isset($_POST['gioco_id']) ? intval($_POST['gioco_id']) : 0;
-    $emails   = isset($_POST['email_destinatario']) ? (array) $_POST['email_destinatario'] : [];
+    $raw_emails = $_POST['email_destinatario'] ?? [];
+    if (is_string($raw_emails)) {
+        $emails = preg_split('/[\s,;]+/', $raw_emails, -1, PREG_SPLIT_NO_EMPTY);
+    } else {
+        $emails = $raw_emails;
+    }
 
     if ($gioco_id <= 0 || empty($emails)) {
         echo '<div style="color:red;">Dati mancanti: seleziona un gioco e almeno un contatto.</div>';

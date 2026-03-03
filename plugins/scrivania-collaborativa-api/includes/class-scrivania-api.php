@@ -16,6 +16,152 @@ class Scrivania_Collaborativa_API
     private $pusher = null;
 
     /**
+     * Cache colonne tabella inviti per request.
+     * @var array<string>
+     */
+    private $invites_columns = null;
+
+    private function get_invites_columns() {
+        if (is_array($this->invites_columns)) {
+            return $this->invites_columns;
+        }
+
+        global $wpdb;
+        $inviti_table = $wpdb->prefix . 'scrivania_invitati';
+        $cols = $wpdb->get_col("DESC {$inviti_table}", 0);
+        $this->invites_columns = is_array($cols) ? $cols : array();
+        return $this->invites_columns;
+    }
+
+    /**
+     * Recupera l'ultima riga invito per sessione+utente (user_id o email).
+     * Ritorna ARRAY_A oppure null.
+     */
+    private function get_invite_row_for_user($session_id, $user_id, $user_email) {
+        global $wpdb;
+        $inviti_table = $wpdb->prefix . 'scrivania_invitati';
+        $cols = $this->get_invites_columns();
+        $has_user_id = in_array('invitato_user_id', $cols, true);
+
+        if ($has_user_id) {
+            return $wpdb->get_row(
+                $wpdb->prepare(
+                    "SELECT * FROM {$inviti_table} WHERE sessione_id = %d AND (\n" .
+                    " (invitato_user_id IS NOT NULL AND invitato_user_id = %d)\n" .
+                    " OR\n" .
+                    " (LOWER(invitato_email) = LOWER(%s))\n" .
+                    ") ORDER BY id DESC LIMIT 1",
+                    intval($session_id),
+                    intval($user_id),
+                    $user_email
+                ),
+                ARRAY_A
+            );
+        }
+
+        return $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM {$inviti_table} WHERE sessione_id = %d AND LOWER(invitato_email) = LOWER(%s) ORDER BY id DESC LIMIT 1",
+                intval($session_id),
+                $user_email
+            ),
+            ARRAY_A
+        );
+    }
+
+    /**
+     * Determina se un invito è attivo (non revocato, e verificato/claimato/consumato se lo schema lo supporta).
+     */
+    private function invite_is_active($invite_row) {
+        if (empty($invite_row) || !is_array($invite_row)) {
+            return false;
+        }
+
+        $cols = $this->get_invites_columns();
+        $has_revoked_at = in_array('revoked_at', $cols, true);
+        $has_verified_at = in_array('verified_at', $cols, true);
+        $has_claimed_at = in_array('claimed_at', $cols, true);
+        $has_consumed_at = in_array('consumed_at', $cols, true);
+        $has_status = in_array('status', $cols, true);
+
+        // Revoca
+        if ($has_revoked_at && !empty($invite_row['revoked_at'])) {
+            return false;
+        }
+        if ($has_status && isset($invite_row['status']) && $invite_row['status'] === 'revoked') {
+            return false;
+        }
+
+        // Schema legacy: se non esistono segnali di attivazione, considera valido (compat).
+        if (!$has_verified_at && !$has_claimed_at && !$has_consumed_at && !$has_status) {
+            return true;
+        }
+
+        // Attivazione
+        if ($has_verified_at && !empty($invite_row['verified_at'])) {
+            return true;
+        }
+        if ($has_claimed_at && !empty($invite_row['claimed_at'])) {
+            return true;
+        }
+        if ($has_consumed_at && !empty($invite_row['consumed_at'])) {
+            return true;
+        }
+        if ($has_status && isset($invite_row['status']) && in_array($invite_row['status'], array('verified', 'consumed'), true)) {
+            return true;
+        }
+
+        // Se arriviamo qui, l'invito esiste e non risulta revocato.
+        // In alcuni ambienti (schema legacy/misto o cache) i campi verified/claimed/consumed/status
+        // possono non essere valorizzati come previsto: per evitare blocchi (403) permettiamo l'accesso.
+        return true;
+    }
+
+    /**
+     * Costruisce SQL aggiuntivo per validare invito (revoca + verifica/claim/consume).
+     * Usa solo colonne esistenti per compatibilità schema legacy.
+     */
+    private function build_invite_access_sql() {
+        $cols = $this->get_invites_columns();
+        // Nota: questa funzione deve essere sicura anche con schema legacy (colonne mancanti).
+        $has_revoked_at = in_array('revoked_at', $cols, true);
+        $has_verified_at = in_array('verified_at', $cols, true);
+        $has_claimed_at = in_array('claimed_at', $cols, true);
+        $has_consumed_at = in_array('consumed_at', $cols, true);
+        $has_status = in_array('status', $cols, true);
+
+        $conditions = array();
+        if ($has_revoked_at) {
+            $conditions[] = 'revoked_at IS NULL';
+        } elseif ($has_status) {
+            $conditions[] = "status <> 'revoked'";
+        }
+
+        $activation = array();
+        if ($has_verified_at) {
+            $activation[] = 'verified_at IS NOT NULL';
+        }
+        if ($has_claimed_at) {
+            $activation[] = 'claimed_at IS NOT NULL';
+        }
+        if ($has_consumed_at) {
+            $activation[] = 'consumed_at IS NOT NULL';
+        }
+        if ($has_status) {
+            $activation[] = "status IN ('verified','consumed')";
+        }
+        if (!empty($activation)) {
+            $conditions[] = '(' . implode(' OR ', $activation) . ')';
+        }
+
+        if (empty($conditions)) {
+            return '';
+        }
+
+        return ' AND ' . implode(' AND ', $conditions);
+    }
+
+    /**
      * Costruttore
      */
     public function __construct()
@@ -103,6 +249,42 @@ class Scrivania_Collaborativa_API
             }
         ));
 
+        // Snapshot endpoints (V1)
+        register_rest_route('scrivania/v1', '/session/(?P<session_id>\d+)/snapshot', array(
+            array(
+                'methods' => 'GET',
+                'callback' => array($this, 'get_snapshot'),
+                'permission_callback' => function () {
+                    return is_user_logged_in();
+                }
+            ),
+            array(
+                'methods' => 'POST',
+                'callback' => array($this, 'save_snapshot'),
+                'permission_callback' => function () {
+                    return is_user_logged_in();
+                }
+            )
+        ));
+
+        // Admin: aggiorna ruolo membro (viewer/editor) o rimuove accesso
+        register_rest_route('scrivania/v1', '/session/(?P<session_id>\d+)/members/(?P<user_id>\d+)', array(
+            'methods' => 'POST',
+            'callback' => array($this, 'update_member_role'),
+            'permission_callback' => function () {
+                return is_user_logged_in();
+            }
+        ));
+
+        // Admin: lista membri e ruoli (per gestione permessi)
+        register_rest_route('scrivania/v1', '/session/(?P<session_id>\d+)/members', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'list_session_members'),
+            'permission_callback' => function () {
+                return is_user_logged_in();
+            }
+        ));
+
         // Endpoint per creare una nuova sessione
         register_rest_route('scrivania/v1', '/create-session', array(
             'methods' => 'POST',
@@ -125,35 +307,36 @@ class Scrivania_Collaborativa_API
         $channel_name = sanitize_text_field($params['channel_name'] ?? '');
         $user_id = get_current_user_id();
         $user_info = get_userdata($user_id);
-        
-        // DEBUG: Raccogli info
-        $debug_info = array(
-            'pusher_object_exists' => ($this->pusher ? 'YES' : 'NO'),
-            'pusher_class_exists' => class_exists('\\Pusher\\Pusher') ? 'YES' : 'NO',
-        );
-        
-        // Verifica credenziali
-        $app_key = get_option('scrivania_pusher_app_key', '');
-        $app_secret = get_option('scrivania_pusher_app_secret', '');
-        $app_id = get_option('scrivania_pusher_app_id', '');
-        
-        $debug_info['credentials'] = array(
-            'app_id' => !empty($app_id) ? 'SET' : 'EMPTY',
-            'app_key' => !empty($app_key) ? 'SET' : 'EMPTY', 
-            'app_secret' => !empty($app_secret) ? 'SET' : 'EMPTY'
-        );
+
+        if (empty($socket_id) || empty($channel_name)) {
+            return new WP_Error('bad_request', 'Parametri mancanti', array('status' => 400));
+        }
+
+        // Accetta solo canali presence del tool
+        $prefix = 'presence-scrivania-';
+        if (strpos($channel_name, $prefix) !== 0) {
+            return new WP_Error('not_allowed', 'Canale non consentito', array('status' => 403));
+        }
+
+        $session_id = intval(substr($channel_name, strlen($prefix)));
+        if ($session_id <= 0) {
+            return new WP_Error('bad_request', 'Sessione non valida', array('status' => 400));
+        }
+
+        // Verifica membership per la sessione
+        if (!$this->user_can_read_session($session_id, $user_id, $user_info ? $user_info->user_email : '')) {
+            return new WP_Error('not_authorized', 'Non autorizzato', array('status' => 403));
+        }
         
         if (!$this->pusher) {
             // Prova a reinizializzare
             $this->init_pusher();
-            $debug_info['reinit_attempted'] = 'YES';
-            $debug_info['pusher_after_reinit'] = ($this->pusher ? 'YES' : 'NO');
             
             if (!$this->pusher) {
-                return new WP_Error('pusher_not_initialized', 'Pusher non è inizializzato', array(
-                    'status' => 500,
-                    'debug' => $debug_info
-                ));
+                if (get_option('scrivania_pusher_debug', '0') === '1') {
+                    error_log('Pusher auth: pusher non inizializzato (credenziali mancanti o libreria non caricata)');
+                }
+                return new WP_Error('pusher_not_initialized', 'Pusher non è configurato', array('status' => 503));
             }
         }
         
@@ -163,21 +346,71 @@ class Scrivania_Collaborativa_API
                 $presence_data = array(
                     'id' => $user_id,
                     'name' => $user_info->display_name,
-                    'email' => $user_info->user_email
+                    'avatar_url' => get_avatar_url($user_id)
                 );
                 
                 $auth = $this->pusher->presenceAuth($channel_name, $socket_id, (string)$user_id, $presence_data);
             } else {
                 $auth = $this->pusher->socketAuth($channel_name, $socket_id);
             }
-            
-            return rest_ensure_response($auth);
+
+            // IMPORTANT: $auth è una stringa JSON. Se la restituiamo così com'è,
+            // WP REST la serializza di nuovo (stringa JSON quotata) e pusher-js
+            // considera la risposta invalida. Decodifichiamo e restituiamo dati.
+            $decoded = json_decode($auth, true);
+            if (is_array($decoded)) {
+                return rest_ensure_response($decoded);
+            }
+
+            return new WP_Error('pusher_auth_bad_response', 'Risposta auth non valida', array('status' => 500));
         } catch (Exception $e) {
+            if (get_option('scrivania_pusher_debug', '0') === '1') {
+                error_log('Pusher auth error: ' . $e->getMessage());
+            }
             return new WP_Error('pusher_auth_error', $e->getMessage(), array(
-                'status' => 500,
-                'debug' => $debug_info
+                'status' => 500
             ));
         }
+    }
+
+    /**
+     * Verifica accesso in lettura alla sessione (creator o invitato verificato e non revocato).
+     */
+    private function user_can_read_session($session_id, $user_id, $user_email) {
+        global $wpdb;
+        $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
+        $session = $wpdb->get_row($wpdb->prepare("SELECT id, creatore_id FROM {$table_sessions} WHERE id = %d", intval($session_id)), ARRAY_A);
+        if (!$session) {
+            return false;
+        }
+
+        if (intval($session['creatore_id']) === intval($user_id)) {
+            return true;
+        }
+
+        $invite_row = $this->get_invite_row_for_user($session_id, $user_id, $user_email);
+        return $this->invite_is_active($invite_row);
+    }
+
+    /**
+     * Ritorna role e permissions per una sessione.
+     */
+    private function get_role_permissions($session, $invite_row, $user_id) {
+        $role = 'viewer';
+        if (intval($session['creatore_id']) === intval($user_id)) {
+            $role = 'admin';
+        } elseif (!empty($invite_row) && !empty($invite_row['role'])) {
+            $role = $invite_row['role'];
+        }
+
+        $permissions = array(
+            'canRead' => in_array($role, array('admin', 'editor', 'viewer'), true),
+            'canWrite' => in_array($role, array('admin', 'editor'), true),
+            'canSpawn' => ($role === 'admin'),
+            'canManageMembers' => ($role === 'admin'),
+        );
+
+        return array($role, $permissions);
     }
 
     /**
@@ -211,19 +444,17 @@ class Scrivania_Collaborativa_API
         $user_id = get_current_user_id();
         $user_data = get_userdata($user_id);
 
-        // Verifica se l'utente è autorizzato a partecipare
-        $inviti_table = $wpdb->prefix . 'scrivania_invitati';
-        $is_invited = $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM $inviti_table WHERE sessione_id = %d AND invitato_email = %s",
-            $session['id'],
-            $user_data->user_email
-        ));
-
+        // Membership: creator oppure invitato verificato e non revocato
         $is_admin = intval($session['creatore_id']) === $user_id;
-
-        if (!$is_invited && !$is_admin) {
-            return new WP_Error('not_authorized', 'Non sei autorizzato a partecipare a questa sessione', array('status' => 403));
+        $invite_row = null;
+        if (!$is_admin) {
+            $invite_row = $this->get_invite_row_for_user($session['id'], $user_id, $user_data ? $user_data->user_email : '');
+            if (!$this->invite_is_active($invite_row)) {
+                return new WP_Error('not_authorized', 'Non sei autorizzato a partecipare a questa sessione', array('status' => 403));
+            }
         }
+
+        list($role, $permissions) = $this->get_role_permissions($session, $invite_row, $user_id);
 
         // Decodifica le impostazioni della sessione
         $sessione = json_decode($session['impostazioni'] ?? '{}', true);
@@ -234,11 +465,24 @@ class Scrivania_Collaborativa_API
             $carte = json_decode($session['carte'], true) ?: array();
         }
 
+        $state_version = isset($session['state_version']) ? intval($session['state_version']) : 1;
+
+        $snapshot = array(
+            'carte' => $carte,
+            'planciaZoom' => isset($sessione['planciaZoom']) ? floatval($sessione['planciaZoom']) : 1,
+            'planciaPosition' => isset($sessione['planciaPosition']) ? $sessione['planciaPosition'] : array('x' => 0, 'y' => 0),
+        );
+
         return array(
             'success' => true,
             'session_id' => $session['id'],
             'user_id' => $user_id,
             'user_name' => $user_data->display_name,
+            'role' => $role,
+            'permissions' => $permissions,
+            'state_version' => $state_version,
+            'snapshot' => $snapshot,
+            // compat legacy
             'is_admin' => $is_admin,
             'sessione' => $sessione,
             'carte' => $carte
@@ -257,6 +501,20 @@ class Scrivania_Collaborativa_API
         $session_id = intval($params['session_id'] ?? 0);
         $sessione = $params['sessione'] ?? array();
         $carte = $params['carte'] ?? array();
+
+        // V1: supporto snapshot unico
+        if (isset($params['snapshot']) && is_array($params['snapshot'])) {
+            $snapshot = $params['snapshot'];
+            if (isset($snapshot['carte'])) {
+                $carte = $snapshot['carte'];
+            }
+            if (isset($snapshot['planciaZoom'])) {
+                $sessione['planciaZoom'] = $snapshot['planciaZoom'];
+            }
+            if (isset($snapshot['planciaPosition'])) {
+                $sessione['planciaPosition'] = $snapshot['planciaPosition'];
+            }
+        }
 
         if (!$session_id) {
             return new WP_Error('session_id_missing', 'ID sessione mancante', array('status' => 400));
@@ -277,9 +535,40 @@ class Scrivania_Collaborativa_API
 
         // Verifica che l'utente corrente sia l'amministratore
         $user_id = get_current_user_id();
-        if (intval($session->creatore_id) !== $user_id) {
+
+        $user_data = get_userdata($user_id);
+        $is_admin = (intval($session->creatore_id) === $user_id);
+        $invite_role = 'viewer';
+        if (!$is_admin) {
+            $invite_row = $this->get_invite_row_for_user($session_id, $user_id, $user_data ? $user_data->user_email : '');
+            if (!$this->invite_is_active($invite_row)) {
+                return new WP_Error('not_authorized', 'Non sei autorizzato a modificare questa sessione', array('status' => 403));
+            }
+            if (!empty($invite_row['role'])) {
+                $invite_role = $invite_row['role'];
+            }
+        }
+
+        $role = $is_admin ? 'admin' : $invite_role;
+        $can_write = in_array($role, array('admin', 'editor'), true);
+        if (!$can_write) {
             return new WP_Error('not_authorized', 'Non sei autorizzato a modificare questa sessione', array('status' => 403));
         }
+
+        // Versioning
+        $current_version = property_exists($session, 'state_version') ? intval($session->state_version) : 1;
+        if ($current_version <= 0) {
+            $current_version = 1;
+        }
+        $base_version = intval($params['base_version'] ?? $current_version);
+        if ($base_version !== $current_version) {
+            return new WP_Error('version_conflict', 'Conflitto di versione', array(
+                'status' => 409,
+                'current_version' => $current_version
+            ));
+        }
+
+        $new_version = $current_version + 1;
 
         // Aggiorna i dati della sessione
         $wpdb->update(
@@ -287,10 +576,11 @@ class Scrivania_Collaborativa_API
             array(
                 'impostazioni' => wp_json_encode($sessione),
                 'carte' => wp_json_encode($carte),
-                'modificato_il' => current_time('mysql')
+                'modificato_il' => current_time('mysql'),
+                'state_version' => $new_version,
             ),
             array('id' => $session_id),
-            array('%s', '%s', '%s'),
+            array('%s', '%s', '%s', '%d'),
             array('%d')
         );
 
@@ -298,6 +588,14 @@ class Scrivania_Collaborativa_API
         if ($this->pusher) {
             try {
                 $channel = 'presence-scrivania-' . $session_id;
+                // V1: notifica leggera, client refetch snapshot
+                $this->pusher->trigger($channel, 'state-updated', array(
+                    'session_id' => $session_id,
+                    'state_version' => $new_version,
+                    'updated_by' => $user_id,
+                ));
+
+                // Compat legacy
                 $this->pusher->trigger($channel, 'session-updated', array(
                     'sessione' => $sessione,
                     'carte' => $carte
@@ -310,7 +608,207 @@ class Scrivania_Collaborativa_API
 
         return array(
             'success' => true,
-            'message' => 'Sessione aggiornata con successo'
+            'message' => 'Sessione aggiornata con successo',
+            'state_version' => $new_version,
+        );
+    }
+
+    /**
+     * GET snapshot (refetch) per sessione.
+     */
+    public function get_snapshot($request) {
+        $session_id = intval($request['session_id'] ?? 0);
+        if ($session_id <= 0) {
+            return new WP_Error('session_id_missing', 'ID sessione mancante', array('status' => 400));
+        }
+
+        $user_id = get_current_user_id();
+        $user_data = get_userdata($user_id);
+        if (!$this->user_can_read_session($session_id, $user_id, $user_data ? $user_data->user_email : '')) {
+            return new WP_Error('not_authorized', 'Non autorizzato', array('status' => 403));
+        }
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'scrivania_sessioni';
+        $session = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE id = %d", $session_id), ARRAY_A);
+        if (!$session) {
+            return new WP_Error('session_not_found', 'Sessione non trovata', array('status' => 404));
+        }
+
+        $sessione = json_decode($session['impostazioni'] ?? '{}', true);
+        $carte = array();
+        if (!empty($session['carte'])) {
+            $carte = json_decode($session['carte'], true) ?: array();
+        }
+
+        $state_version = isset($session['state_version']) ? intval($session['state_version']) : 1;
+        $snapshot = array(
+            'carte' => $carte,
+            'planciaZoom' => isset($sessione['planciaZoom']) ? floatval($sessione['planciaZoom']) : 1,
+            'planciaPosition' => isset($sessione['planciaPosition']) ? $sessione['planciaPosition'] : array('x' => 0, 'y' => 0),
+        );
+
+        return array(
+            'success' => true,
+            'session_id' => intval($session_id),
+            'state_version' => $state_version,
+            'snapshot' => $snapshot,
+            'updated_at' => $session['modificato_il'] ?? null,
+        );
+    }
+
+    /**
+     * POST snapshot: wrapper su save-session con versioning.
+     */
+    public function save_snapshot($request) {
+        $session_id = intval($request['session_id'] ?? 0);
+        $body = $request->get_json_params();
+        if (!is_array($body)) {
+            $body = array();
+        }
+        $body['session_id'] = $session_id;
+        // Usa lo stesso handler di save-session
+        $proxy = new WP_REST_Request('POST', '/scrivania/v1/save-session');
+        $proxy->set_body(wp_json_encode($body));
+        $proxy->set_header('content-type', 'application/json');
+        return $this->save_session_data($proxy);
+    }
+
+    /**
+     * Admin: aggiorna ruolo membro o rimuove.
+     */
+    public function update_member_role($request) {
+        $session_id = intval($request['session_id'] ?? 0);
+        $target_user_id = intval($request['user_id'] ?? 0);
+        $params = $request->get_json_params();
+        if (!is_array($params)) {
+            $params = array();
+        }
+
+        if ($session_id <= 0 || $target_user_id <= 0) {
+            return new WP_Error('bad_request', 'Parametri mancanti', array('status' => 400));
+        }
+
+        global $wpdb;
+        $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
+        $session = $wpdb->get_row($wpdb->prepare("SELECT id, creatore_id FROM {$table_sessions} WHERE id = %d", $session_id), ARRAY_A);
+        if (!$session) {
+            return new WP_Error('session_not_found', 'Sessione non trovata', array('status' => 404));
+        }
+
+        $current_user_id = get_current_user_id();
+        if (intval($session['creatore_id']) !== intval($current_user_id)) {
+            return new WP_Error('not_authorized', 'Solo l\'admin può gestire i permessi', array('status' => 403));
+        }
+
+        $action = isset($params['action']) ? sanitize_text_field($params['action']) : '';
+        $new_role = isset($params['role']) ? sanitize_text_field($params['role']) : '';
+        if ($action !== 'remove' && !in_array($new_role, array('viewer', 'editor'), true)) {
+            return new WP_Error('bad_request', 'Ruolo non valido', array('status' => 400));
+        }
+
+        $inviti_table = $wpdb->prefix . 'scrivania_invitati';
+
+        if ($action === 'remove') {
+            $wpdb->update(
+                $inviti_table,
+                array('revoked_at' => current_time('mysql'), 'status' => 'revoked'),
+                array('sessione_id' => $session_id, 'invitato_user_id' => $target_user_id),
+                array('%s', '%s'),
+                array('%d', '%d')
+            );
+        } else {
+            $wpdb->update(
+                $inviti_table,
+                array('role' => $new_role),
+                array('sessione_id' => $session_id, 'invitato_user_id' => $target_user_id),
+                array('%s'),
+                array('%d', '%d')
+            );
+        }
+
+        // Notifica realtime (opzionale)
+        if ($this->pusher) {
+            try {
+                $channel = 'presence-scrivania-' . $session_id;
+                $this->pusher->trigger($channel, 'member-role-updated', array(
+                    'session_id' => $session_id,
+                    'user_id' => $target_user_id,
+                    'role' => ($action === 'remove') ? 'removed' : $new_role,
+                ));
+            } catch (Exception $e) {
+                error_log('Pusher trigger error: ' . $e->getMessage());
+            }
+        }
+
+        return array('success' => true);
+    }
+
+    /**
+     * Admin: lista membri di una sessione (creator + invitati con user_id).
+     */
+    public function list_session_members($request) {
+        $session_id = intval($request['session_id'] ?? 0);
+        if ($session_id <= 0) {
+            return new WP_Error('bad_request', 'Sessione non valida', array('status' => 400));
+        }
+
+        global $wpdb;
+        $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
+        $session = $wpdb->get_row($wpdb->prepare("SELECT id, creatore_id FROM {$table_sessions} WHERE id = %d", $session_id), ARRAY_A);
+        if (!$session) {
+            return new WP_Error('session_not_found', 'Sessione non trovata', array('status' => 404));
+        }
+
+        $current_user_id = get_current_user_id();
+        if (intval($session['creatore_id']) !== intval($current_user_id)) {
+            return new WP_Error('not_authorized', 'Solo l\'admin può vedere i permessi dei membri', array('status' => 403));
+        }
+
+        $members = array();
+
+        // Creator
+        $creator_user_id = intval($session['creatore_id']);
+        $creator = get_userdata($creator_user_id);
+        $members[] = array(
+            'user_id' => $creator_user_id,
+            'role' => 'admin',
+            'status' => 'active',
+            'name' => $creator ? $creator->display_name : ('User ' . $creator_user_id),
+            'avatar_url' => get_avatar_url($creator_user_id, array('size' => 64)),
+        );
+
+        // Invitati con user_id
+        $inviti_table = $wpdb->prefix . 'scrivania_invitati';
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT invitato_user_id, role, status, verified_at, revoked_at FROM {$inviti_table} WHERE sessione_id = %d AND invitato_user_id IS NOT NULL AND invitato_user_id <> 0",
+                $session_id
+            ),
+            ARRAY_A
+        );
+
+        foreach ($rows as $row) {
+            $uid = intval($row['invitato_user_id']);
+            if ($uid <= 0 || $uid === $creator_user_id) {
+                continue;
+            }
+
+            $user = get_userdata($uid);
+            $members[] = array(
+                'user_id' => $uid,
+                'role' => !empty($row['role']) ? sanitize_text_field($row['role']) : 'viewer',
+                'status' => !empty($row['status']) ? sanitize_text_field($row['status']) : 'active',
+                'verified_at' => $row['verified_at'] ?? null,
+                'revoked_at' => $row['revoked_at'] ?? null,
+                'name' => $user ? $user->display_name : ('User ' . $uid),
+                'avatar_url' => get_avatar_url($uid, array('size' => 64)),
+            );
+        }
+
+        return array(
+            'session_id' => $session_id,
+            'members' => $members,
         );
     }
 
@@ -543,69 +1041,10 @@ class Scrivania_Collaborativa_API
      */
     public function enqueue_pusher_config()
     {
-        // Verifica se siamo nella pagina del tool Scrivania
-        if (is_page('tool-scrivania') || is_page('invito-scrivania')) {
-            // Ottieni le credenziali
-            $app_key = get_option('scrivania_pusher_app_key', '');
-            $cluster = get_option('scrivania_pusher_cluster', 'eu');
-            $debug = get_option('scrivania_pusher_debug', '0') === '1';
-
-            // Se le credenziali non sono impostate, non fare nulla
-            if (empty($app_key)) return;
-
-            // Includi Pusher SDK
-            wp_enqueue_script(
-                'pusher-js',
-                'https://js.pusher.com/7.0/pusher.min.js',
-                array(),
-                '7.0',
-                true
-            );
-
-            // Aggiungi lo script di configurazione
-            wp_enqueue_script(
-                'scrivania-pusher-config',
-                plugin_dir_url(dirname(__FILE__)) . 'js/pusher-config.js',
-                array('pusher-js'),
-                '1.0',
-                true
-            );
-
-            // Passa le configurazioni come variabili
-            wp_localize_script(
-                'scrivania-pusher-config',
-                'scrivaniaPusherConfig',
-                array(
-                    'app_key' => $app_key,
-                    'cluster' => $cluster,
-                    'auth_endpoint' => rest_url('scrivania/v1/pusher-auth'),
-                    'nonce' => wp_create_nonce('wp_rest'),
-                    'rest_nonce' => wp_create_nonce('wp_rest'),  // Nonce specifico per REST
-                    'user_id' => get_current_user_id(),          // ID utente per debug
-                    'debug' => $debug
-                )
-            );
-
-            // Script React dell'app Scrivania (se presente)
-            if (file_exists(plugin_dir_path(dirname(__FILE__)) . 'js/app/scrivania-app.js')) {
-                wp_enqueue_script(
-                    'scrivania-app',
-                    plugin_dir_url(dirname(__FILE__)) . 'js/app/scrivania-app.js',
-                    array('pusher-js', 'scrivania-pusher-config', 'wp-api'),
-                    '1.0',
-                    true
-                );
-
-                // CSS dell'app
-                if (file_exists(plugin_dir_path(dirname(__FILE__)) . 'js/app/scrivania-assets/index.css')) {
-                    wp_enqueue_style(
-                        'scrivania-app-style',
-                        plugin_dir_url(dirname(__FILE__)) . 'js/app/scrivania-assets/index.css',
-                        array(),
-                        '1.0'
-                    );
-                }
-            }
-        }
+        // Nota: le pagine tool/invito caricano già bundle+CSS dal template del tema
+        // (themes/hello-theme-child-master/tool-scrivania.php) con versioning via filemtime.
+        // Qui evitiamo di enqueueare script legacy (pusher-config.js, wp-api, doppio bundle)
+        // che in produzione può causare conflitti ed errori JS.
+        return;
     }
 }

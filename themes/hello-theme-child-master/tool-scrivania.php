@@ -1,10 +1,18 @@
 <?php
 
 /**
- * Template Name: Tool Scrivania
+ * Template Name: Tool Scrivania V1.2
  * 
  * Questo template carica l'app React per la scrivania collaborativa
  */
+
+// Evita che plugin/cache CDN servano una pagina con nonce utente "stale".
+if (!defined('DONOTCACHEPAGE')) {
+    define('DONOTCACHEPAGE', true);
+}
+if (function_exists('nocache_headers')) {
+    nocache_headers();
+}
 
 get_header();
 
@@ -16,8 +24,8 @@ if (!is_user_logged_in()) {
 }
 
 // Ottieni informazioni sull'utente
-$current_user = get_current_user_id();
-$user_data = get_userdata($current_user);
+$current_user_id = get_current_user_id();
+$user_data = get_userdata($current_user_id);
 
 // Verifica se l'utente ha un abbonamento valido (solo se non è amministratore)
 $has_access = current_user_can('administrator');
@@ -25,7 +33,6 @@ $has_access = current_user_can('administrator');
 if (!$has_access && function_exists('pmpro_hasMembershipLevel')) {
     $has_access = pmpro_hasMembershipLevel();
 }
-
 /* if (!$has_access) {
     echo '<div class="site-main"><div class="container"><h2>Non hai i permessi necessari</h2><p>È richiesto un abbonamento attivo.</p></div></div>';
     get_footer();
@@ -43,7 +50,7 @@ if (empty($token)) {
     // Cerca una sessione esistente per l'utente corrente
     $session = $wpdb->get_row($wpdb->prepare(
         "SELECT * FROM $table_sessions WHERE creatore_id = %d ORDER BY id DESC LIMIT 1",
-        $current_user
+        $current_user_id
     ));
 
     if ($session) {
@@ -58,7 +65,6 @@ if (empty($token)) {
 
 // Ora verifichiamo se il token è valido
 global $wpdb;
-
 // Prima controlla se è un token di una sessione
 $session_table = $wpdb->prefix . 'scrivania_sessioni';
 $session = $wpdb->get_row($wpdb->prepare(
@@ -66,49 +72,210 @@ $session = $wpdb->get_row($wpdb->prepare(
     $token
 ));
 
-// Se non è una sessione, controlla se è un invito
 if (!$session) {
+    // Se è un token invito, l'utente deve passare dalla landing invito (verifica email + claim)
     $inviti_table = $wpdb->prefix . 'scrivania_invitati';
     $invito = $wpdb->get_row($wpdb->prepare(
         "SELECT * FROM $inviti_table WHERE token = %s",
         $token
     ));
 
-    if (!$invito) {
-        echo '<div class="site-main"><div class="container"><h2>Token non valido</h2><p>Il token specificato non corrisponde a nessuna sessione o invito.</p></div></div>';
+    if ($invito) {
+        echo '<div class="site-main"><div class="container" style="max-width:800px; margin:0 auto; padding:2rem;">';
+        echo '<h2>Link invito</h2>';
+        echo '<p>Per accedere devi usare il link di invito e completare la verifica email.</p>';
+        echo '<p><a class="button button-primary" href="' . esc_url(home_url('/invito-scrivania/?token=' . urlencode($token))) . '">Vai alla pagina invito</a></p>';
+        echo '</div></div>';
         get_footer();
         exit;
     }
 
-    // Se è un invito, recupera la sessione associata
-    $session = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM $session_table WHERE id = %d",
-        $invito->sessione_id
-    ));
+    echo '<div class="site-main"><div class="container"><h2>Token non valido</h2><p>Il token specificato non corrisponde a nessuna sessione.</p></div></div>';
+    get_footer();
+    exit;
+}
+// Autorizzazione: creator o invitato (user_id preferito, fallback email legacy)
+$is_creator = (intval($session->creatore_id) === intval($current_user_id));
+$is_invited = false;
+$invito_role = 'viewer';
 
-    /* if (!$session) {
-        echo '<div class="site-main"><div class="container"><h2>Sessione non trovata</h2><p>La sessione associata all\'invito non esiste più.</p></div></div>';
-        get_footer();
-        exit;
-    } */
+if (!$is_creator) {
+    $inviti_table = $wpdb->prefix . 'scrivania_invitati';
 
-    // Verifica che l'utente corrente sia autorizzato (creatore o invitato)
-    $is_creator = ($session->creatore_id == $current_user);
-    $is_invited = ($invito->invitato_email == $user_data->user_email);
-
-    if (!$is_creator && !$is_invited) {
-        echo '<div class="site-main"><div class="container"><h2>Non autorizzato</h2><p>Non sei autorizzato a partecipare a questa sessione.</p></div></div>';
-        get_footer();
-        exit;
+    // Compat schema: alcune installazioni potrebbero non avere tutte le colonne V1.
+    $invite_columns = $wpdb->get_col("DESC {$inviti_table}", 0);
+    if (!is_array($invite_columns)) {
+        $invite_columns = array();
     }
+
+    $has_user_id = in_array('invitato_user_id', $invite_columns, true);
+    $has_revoked_at = in_array('revoked_at', $invite_columns, true);
+    $has_verified_at = in_array('verified_at', $invite_columns, true);
+    $has_claimed_at = in_array('claimed_at', $invite_columns, true);
+    $has_consumed_at = in_array('consumed_at', $invite_columns, true);
+    $has_status = in_array('status', $invite_columns, true);
+
+    // Fetch “grezzo” dell’ultimo invito (senza condizioni) e valutazione in PHP.
+    if ($has_user_id) {
+        $invito_any = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $inviti_table WHERE sessione_id = %d AND (\n" .
+            " (invitato_user_id IS NOT NULL AND invitato_user_id = %d)\n" .
+            " OR\n" .
+            " (LOWER(invitato_email) = LOWER(%s))\n" .
+            ") ORDER BY id DESC LIMIT 1",
+            intval($session->id),
+            intval($current_user_id),
+            $user_data->user_email
+        ));
+    } else {
+        $invito_any = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $inviti_table WHERE sessione_id = %d AND LOWER(invitato_email) = LOWER(%s) ORDER BY id DESC LIMIT 1",
+            intval($session->id),
+            $user_data->user_email
+        ));
+    }
+
+    $invito = null;
+    if ($invito_any) {
+        $is_revoked = false;
+        if ($has_revoked_at && !empty($invito_any->revoked_at)) {
+            $is_revoked = true;
+        }
+        if (!$is_revoked && $has_status && !empty($invito_any->status) && $invito_any->status === 'revoked') {
+            $is_revoked = true;
+        }
+
+        if (!$is_revoked) {
+            // Se non esistono segnali di attivazione nello schema, considera valido (compat legacy).
+            if (!$has_verified_at && !$has_claimed_at && !$has_consumed_at && !$has_status) {
+                $invito = $invito_any;
+            } else {
+                $is_active = false;
+                if ($has_verified_at && !empty($invito_any->verified_at)) {
+                    $is_active = true;
+                }
+                if (!$is_active && $has_claimed_at && !empty($invito_any->claimed_at)) {
+                    $is_active = true;
+                }
+                if (!$is_active && $has_consumed_at && !empty($invito_any->consumed_at)) {
+                    $is_active = true;
+                }
+                if (!$is_active && $has_status && !empty($invito_any->status) && in_array($invito_any->status, array('verified', 'consumed'), true)) {
+                    $is_active = true;
+                }
+
+                // In produzione abbiamo visto casi in cui verified_at/status non vengono popolati
+                // correttamente (cache/optimizer/schema misto). Se l'invito esiste e non è revocato,
+                // consenti comunque l'accesso in lettura e lascia alla UI/ruoli il resto.
+                $invito = $invito_any;
+            }
+        }
+    }
+
+    if ($invito) {
+        $is_invited = true;
+        if (!empty($invito->role)) {
+            $invito_role = $invito->role;
+        }
+    }
+}
+
+// Fallback robusto: se arrivi dalla landing invito, porta anche invite_token.
+// In quel caso possiamo validare direttamente il token invito senza dipendere dalla lookup per email/sessione.
+if (!$is_creator && !$is_invited) {
+    $invite_token = isset($_GET['invite_token']) ? sanitize_text_field($_GET['invite_token']) : '';
+    if (!empty($invite_token)) {
+        $inviti_table = $wpdb->prefix . 'scrivania_invitati';
+        $invito_by_token = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $inviti_table WHERE token = %s ORDER BY id DESC LIMIT 1",
+            $invite_token
+        ));
+
+        if ($invito_by_token
+            && intval($invito_by_token->sessione_id) === intval($session->id)
+            && $user_data
+            && !empty($user_data->user_email)
+            && strtolower((string) $invito_by_token->invitato_email) === strtolower((string) $user_data->user_email)
+        ) {
+            $is_revoked = false;
+            if (property_exists($invito_by_token, 'revoked_at') && !empty($invito_by_token->revoked_at)) {
+                $is_revoked = true;
+            }
+            if (property_exists($invito_by_token, 'status') && !empty($invito_by_token->status) && $invito_by_token->status === 'revoked') {
+                $is_revoked = true;
+            }
+
+            if (!$is_revoked) {
+                $is_invited = true;
+                if (property_exists($invito_by_token, 'role') && !empty($invito_by_token->role)) {
+                    $invito_role = $invito_by_token->role;
+                }
+
+                // Se lo schema supporta invitato_user_id, prova a bindare l’invito all’utente corrente.
+                $invite_columns = $wpdb->get_col("DESC {$inviti_table}", 0);
+                if (is_array($invite_columns) && in_array('invitato_user_id', $invite_columns, true) && empty($invito_by_token->invitato_user_id)) {
+                    $wpdb->update(
+                        $inviti_table,
+                        array('invitato_user_id' => intval($current_user_id)),
+                        array('id' => intval($invito_by_token->id)),
+                        array('%d'),
+                        array('%d')
+                    );
+                }
+            }
+        }
+    }
+}
+
+if (!$is_creator && !$is_invited) {
+    $who = '';
+    if ($user_data && !empty($user_data->user_email)) {
+        $who = esc_html($user_data->user_email) . ' (ID ' . intval($current_user_id) . ')';
+    } else {
+        $who = 'utente ID ' . intval($current_user_id);
+    }
+
+    // Messaggio pensato per ridurre i falsi “bug”: spesso si apre il link sessione (del creatore)
+    // con un account diverso da quello che ha creato la sessione o da quello invitato.
+    echo '<div class="site-main"><div class="container" style="max-width:900px; margin:0 auto; padding:2rem;">';
+    echo '<h2>Non autorizzato</h2>';
+    echo '<p>Non sei autorizzato a partecipare a questa sessione.</p>';
+    echo '<p><strong>Sei loggato come:</strong> ' . $who . '</p>';
+    echo '<p><strong>Sessione:</strong> ID ' . intval($session->id) . ' &middot; <strong>Creatore:</strong> utente ID ' . intval($session->creatore_id) . '</p>';
+    if (!empty($_SERVER['HTTP_HOST'])) {
+        echo '<p><strong>Host:</strong> ' . esc_html((string) $_SERVER['HTTP_HOST']) . '</p>';
+    }
+
+    echo '<hr style="margin:1.5rem 0;" />';
+    echo '<p><strong>Possibili cause:</strong></p>';
+    echo '<ul style="margin-left:1.2rem; list-style:disc;">';
+    echo '<li>Questo è un <strong>link di sessione</strong> (usato dal creatore) e stai usando un account diverso dal creatore.</li>';
+    echo '<li>Non risulti tra gli <strong>invitati</strong> (oppure l’invito è stato revocato).</li>';
+    echo '</ul>';
+
+    echo '<p style="margin-top:1rem;"><strong>Cosa fare:</strong></p>';
+    echo '<ul style="margin-left:1.2rem; list-style:disc;">';
+    echo '<li>Se hai ricevuto un invito via email, apri il link <strong>/invito-scrivania/?token=...</strong> (quello dell’invito), non questo.</li>';
+    echo '<li>Se sei il creatore della sessione, prova ad aprire <a href="' . esc_url(home_url('/tool-scrivania/')) . '">Tool Scrivania</a> senza token.</li>';
+    echo '</ul>';
+
+    $logout_url = wp_logout_url(add_query_arg(null, null));
+    echo '<p style="margin-top:1rem;"><a class="button button-primary" href="' . esc_url($logout_url) . '">Esci e accedi con un altro account</a></p>';
+    echo '</div></div>';
+    get_footer();
+    exit;
 }
 
 // A questo punto abbiamo un token valido e l'utente è autorizzato
 // Mostriamo l'interfaccia principale
 $safe_token = isset($token) ? $token : '';
-$safe_user_id = isset($current_user) ? intval($current_user) : 0;
+$safe_user_id = isset($current_user_id) ? intval($current_user_id) : 0;
 $safe_user_name = isset($user_data) && $user_data ? $user_data->display_name : '';
 $safe_session_id = isset($session) && $session ? $session->id : '';
+$safe_user_role = $is_creator ? 'admin' : ($invito_role ?: 'viewer');
+
+$safe_rest_nonce = wp_create_nonce('wp_rest');
+$safe_ajax_url = admin_url('admin-ajax.php');
 
 
 
@@ -117,11 +284,14 @@ $safe_session_id = isset($session) && $session ? $session->id : '';
 
 <main class="site-main">
    
-    <div class="container"
+    <div id="root" class="container"
         data-token="<?php echo esc_attr($safe_token); ?>"
         data-user-id="<?php echo esc_attr($safe_user_id); ?>"
         data-user-name="<?php echo esc_attr($safe_user_name); ?>"
         data-session-id="<?php echo esc_attr($safe_session_id); ?>"
+        data-user-role="<?php echo esc_attr($safe_user_role); ?>"
+        data-rest-nonce="<?php echo esc_attr($safe_rest_nonce); ?>"
+        data-ajax-url="<?php echo esc_url($safe_ajax_url); ?>"
         style="max-width:1200px; margin:0 auto; padding:1rem;">
 
         <!--  data-user-id="<?php //echo esc_attr($current_user); 
@@ -149,7 +319,10 @@ $safe_session_id = isset($session) && $session ? $session->id : '';
                 setTimeout(function() {
                     const reactRoot = document.getElementById('root');
                     if (reactRoot && reactRoot.children.length > 0) {
-                        document.getElementById('scrivania-loading').style.display = 'none';
+                        const loadingEl = document.getElementById('scrivania-loading');
+                        if (loadingEl) {
+                            loadingEl.style.display = 'none';
+                        }
                     }
                 }, 2000); // Aspetta 2 secondi per il mounting
             });
@@ -161,44 +334,61 @@ $safe_session_id = isset($session) && $session ? $session->id : '';
 // Assicurati che gli script necessari siano caricati
 function load_scrivania_scripts()
 {
-    // Carica Pusher
-    wp_enqueue_script(
-        'pusher-js',
-        'https://js.pusher.com/7.0/pusher.min.js',
-        array(),
-        '7.0',
-        true
-    );
+    $plugin_url = plugins_url('scrivania-collaborativa-api/');
+    $plugin_dir = WP_PLUGIN_DIR . '/scrivania-collaborativa-api/';
 
-    // Carica script di configurazione Pusher
-    wp_enqueue_script(
-        'scrivania-pusher-config',
-        plugin_dir_url(dirname(__FILE__) . '/../plugins/scrivania-collaborativa-api') . 'js/pusher-config.js',
-        array('pusher-js'),
-        '1.0',
-        true
-    );
-    wp_enqueue_script('wp-api');
+    // CSS build (Vite)
+    $css_rel = 'js/app/scrivania-assets/index.css';
+    $css_path = $plugin_dir . $css_rel;
+    if (file_exists($css_path)) {
+        wp_enqueue_style(
+            'scrivania-app-css',
+            $plugin_url . $css_rel,
+            array(),
+            (string) filemtime($css_path)
+        );
+    }
 
-    // Pass configuration values
-    wp_localize_script(
-        'scrivania-pusher-config',
-        'scrivaniaPusherConfig',
-        array(
-            'app_key' => get_option('scrivania_pusher_app_key', '36cf02242d86c80d6e7b'),
-            'cluster' => get_option('scrivania_pusher_cluster', 'eu'),
-            'auth_endpoint' => rest_url('scrivania/v1/pusher-auth'),
-            'nonce' => wp_create_nonce('wp_rest')
-        )
-    );
-
-    // Load React app
+    // JS build (Vite)
+    $js_rel = 'js/app/scrivania-app.js';
+    $js_path = $plugin_dir . $js_rel;
     wp_enqueue_script(
         'scrivania-app',
-        plugin_dir_url(dirname(__FILE__) . '/../plugins/scrivania-collaborativa-api') . 'js/app/scrivania-app.js',
-        array('pusher-js', 'scrivania-pusher-config'),
-        '1.0',
+        $plugin_url . $js_rel,
+        array(),
+        file_exists($js_path) ? (string) filemtime($js_path) : '1.0',
         true
+    );
+
+    // Config globale usata dal client Pusher (bundle React)
+    $app_key = (string) get_option('scrivania_pusher_app_key', '');
+    $app_id = (string) get_option('scrivania_pusher_app_id', '');
+    $app_secret = (string) get_option('scrivania_pusher_app_secret', '');
+
+    $pusher_php_loaded = class_exists('\\Pusher\\Pusher');
+    $has_app_id = !empty($app_id);
+    $has_app_secret = !empty($app_secret);
+    $has_app_key = !empty($app_key);
+    $server_ready = ($has_app_key && $has_app_id && $has_app_secret && $pusher_php_loaded);
+
+    $cfg = array(
+        'app_key' => $app_key,
+        'cluster' => get_option('scrivania_pusher_cluster', 'eu'),
+        'auth_endpoint' => rest_url('scrivania/v1/pusher-auth'),
+        'nonce' => wp_create_nonce('wp_rest'),
+        // Il client non deve tentare auth se il server non può firmare le richieste.
+        'server_ready' => $server_ready,
+        // Debug non sensibile (non esponiamo mai app_secret/app_id)
+        'pusher_php_loaded' => $pusher_php_loaded,
+        'has_app_key' => $has_app_key,
+        'has_app_id' => $has_app_id,
+        'has_app_secret' => $has_app_secret,
+    );
+
+    wp_add_inline_script(
+        'scrivania-app',
+        'window.scrivaniaPusherConfig = ' . wp_json_encode($cfg) . ';',
+        'before'
     );
 }
 
