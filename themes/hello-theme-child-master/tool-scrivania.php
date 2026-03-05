@@ -18,7 +18,7 @@ get_header();
 
 // Controlla se l'utente è loggato
 if (!is_user_logged_in()) {
-    echo '<div class="site-main"><div class="container"><h2>Devi effettuare l\'accesso per utilizzare questo strumento</h2></div></div>';
+    echo '<div class="site-main-fw"><div class="container"><h2>Devi effettuare l\'accesso per utilizzare questo strumento</h2></div></div>';
     get_footer();
     exit;
 }
@@ -57,7 +57,7 @@ if (empty($token)) {
         $token = $session->token;
     } else {
         // Se siamo qui, l'utente non ha né token né sessioni esistenti
-        echo '<div class="site-main"><div class="container"><h2>Nessuna sessione disponibile</h2><p>Non hai sessioni attive e non hai specificato un token di invito.</p></div></div>';
+        echo '<div class="site-main-fw"><div class="container"><h2>Nessuna sessione disponibile</h2><p>Non hai sessioni attive e non hai specificato un token di invito.</p></div></div>';
         get_footer();
         exit;
     }
@@ -81,7 +81,7 @@ if (!$session) {
     ));
 
     if ($invito) {
-        echo '<div class="site-main"><div class="container" style="max-width:800px; margin:0 auto; padding:2rem;">';
+        echo '<div class="site-main-fw"><div class="container" style="max-width:800px; margin:0 auto; padding:2rem;">';
         echo '<h2>Link invito</h2>';
         echo '<p>Per accedere devi usare il link di invito e completare la verifica email.</p>';
         echo '<p><a class="button button-primary" href="' . esc_url(home_url('/invito-scrivania/?token=' . urlencode($token))) . '">Vai alla pagina invito</a></p>';
@@ -237,7 +237,7 @@ if (!$is_creator && !$is_invited) {
 
     // Messaggio pensato per ridurre i falsi “bug”: spesso si apre il link sessione (del creatore)
     // con un account diverso da quello che ha creato la sessione o da quello invitato.
-    echo '<div class="site-main"><div class="container" style="max-width:900px; margin:0 auto; padding:2rem;">';
+    echo '<div class="site-main-fw"><div class="container" style="max-width:900px; margin:0 auto; padding:2rem;">';
     echo '<h2>Non autorizzato</h2>';
     echo '<p>Non sei autorizzato a partecipare a questa sessione.</p>';
     echo '<p><strong>Sei loggato come:</strong> ' . $who . '</p>';
@@ -282,17 +282,16 @@ $safe_ajax_url = admin_url('admin-ajax.php');
 ?>
 
 
-<main class="site-main">
+<main class="site-main-fw">
    
-    <div id="root" class="container"
+    <div id="root" class="scrivania-container"
         data-token="<?php echo esc_attr($safe_token); ?>"
         data-user-id="<?php echo esc_attr($safe_user_id); ?>"
         data-user-name="<?php echo esc_attr($safe_user_name); ?>"
         data-session-id="<?php echo esc_attr($safe_session_id); ?>"
         data-user-role="<?php echo esc_attr($safe_user_role); ?>"
         data-rest-nonce="<?php echo esc_attr($safe_rest_nonce); ?>"
-        data-ajax-url="<?php echo esc_url($safe_ajax_url); ?>"
-        style="max-width:1200px; margin:0 auto; padding:1rem;">
+        data-ajax-url="<?php echo esc_url($safe_ajax_url); ?>">
 
         <!--  data-user-id="<?php //echo esc_attr($current_user); 
                             ?>" -->

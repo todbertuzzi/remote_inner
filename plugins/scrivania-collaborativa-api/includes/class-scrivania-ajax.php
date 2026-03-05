@@ -102,27 +102,51 @@ class Scrivania_Ajax {
             echo '<div style="color:red;">Nessun contatto valido.</div>';
             wp_die();
         }
-        
-        // Verifica limiti abbonamento
+
+        // Strategia sessione:
+        // - Welcome: riusa la sessione esistente, ma resetta stato + revoca inviti precedenti ad ogni nuovo batch.
+        // - Non-Welcome: crea sempre una nuova sessione e archivia/chiude le precedenti (revocando i relativi inviti).
+        $is_welcome = false;
         if (function_exists('pmpro_getMembershipLevelForUser')) {
             $membership = pmpro_getMembershipLevelForUser($user_id);
-            
-            if ($membership && strtolower($membership->name) === 'welcome') {
-                $table = $wpdb->prefix . 'scrivania_sessioni';
-                $sessioni = $wpdb->get_var($wpdb->prepare(
-                    "SELECT COUNT(*) FROM $table WHERE creatore_id = %d",
+            if ($membership && strtolower((string) $membership->name) === 'welcome') {
+                $is_welcome = true;
+            }
+        }
+
+        $session_id = 0;
+
+        if ($is_welcome) {
+            $existing_session_id = self::get_latest_session_id_for_creator($user_id);
+
+            if (!empty($existing_session_id)) {
+                $session_id = (int) $existing_session_id;
+                // Welcome: reset sessione e revoca tutti gli inviti precedenti.
+                self::reset_session_state($session_id);
+                self::revoke_invites_for_session($session_id);
+            } else {
+                // Welcome: può creare la prima e unica sessione.
+                // Difensivo: se per qualche motivo esistono già sessioni (schema inconsistente), blocca.
+                $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
+                $sessioni = (int) $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM {$table_sessions} WHERE creatore_id = %d",
                     $user_id
                 ));
-                
                 if ($sessioni >= 1) {
                     echo '<div style="color:red;">Gli utenti Welcome possono creare massimo 1 sessione. Upgrade il tuo piano per creare più sessioni.</div>';
                     wp_die();
                 }
+
+                $session_id = (int) self::create_new_session($user_id);
+            }
+        } else {
+            // Non-Welcome: nuova sessione sempre
+            $session_id = (int) self::create_new_session($user_id);
+            if (!empty($session_id)) {
+                self::archive_previous_sessions_for_creator($user_id, $session_id);
             }
         }
 
-        // Crea o recupera la sessione
-        $session_id = self::create_or_get_session($user_id);
         if (!$session_id) {
             echo '<div style="color:red;">Errore nella creazione della sessione.</div>';
             wp_die();
@@ -271,6 +295,208 @@ class Scrivania_Ajax {
         ]);
         
         return $wpdb->insert_id;
+    }
+
+    /**
+     * Ritorna l'ultima sessione per un creatore (id), oppure 0.
+     */
+    private static function get_latest_session_id_for_creator($user_id) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'scrivania_sessioni';
+        $id = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$table} WHERE creatore_id = %d ORDER BY id DESC LIMIT 1",
+            intval($user_id)
+        ));
+        return $id ? (int) $id : 0;
+    }
+
+    /**
+     * Crea SEMPRE una nuova sessione per l'utente (no riuso).
+     */
+    private static function create_new_session($user_id) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'scrivania_sessioni';
+
+        $token = wp_generate_password(24, false);
+        $ud = get_userdata($user_id);
+        $display = ($ud && !empty($ud->display_name)) ? $ud->display_name : 'utente';
+        $nome = 'Sessione di ' . $display;
+
+        $impostazioni = [
+            'attiva' => false,
+            'iniziata' => null,
+            'mazzoId' => 0,
+            'sfondo' => null
+        ];
+
+        $ok = $wpdb->insert($table, [
+            'token' => $token,
+            'creatore_id' => intval($user_id),
+            'nome' => $nome,
+            'impostazioni' => wp_json_encode($impostazioni),
+            'carte' => wp_json_encode([]),
+            'creato_il' => current_time('mysql'),
+            'modificato_il' => current_time('mysql')
+        ]);
+
+        if ($ok === false) {
+            return 0;
+        }
+
+        return (int) $wpdb->insert_id;
+    }
+
+    /**
+     * Reset dello stato sessione (plancia/carte) mantenendo lo stesso session_id.
+     */
+    private static function reset_session_state($session_id) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'scrivania_sessioni';
+
+        $impostazioni = [
+            'attiva' => false,
+            'iniziata' => null,
+            'mazzoId' => 0,
+            'sfondo' => null
+        ];
+
+        // Compat schema: state_version potrebbe non esistere.
+        $cols = $wpdb->get_col("DESC {$table}", 0);
+        $has_state_version = is_array($cols) && in_array('state_version', $cols, true);
+
+        if ($has_state_version) {
+            $wpdb->query(
+                $wpdb->prepare(
+                    "UPDATE {$table} SET impostazioni = %s, carte = %s, modificato_il = %s, state_version = state_version + 1 WHERE id = %d",
+                    wp_json_encode($impostazioni),
+                    wp_json_encode([]),
+                    current_time('mysql'),
+                    intval($session_id)
+                )
+            );
+            return;
+        }
+
+        $wpdb->update(
+            $table,
+            array(
+                'impostazioni' => wp_json_encode($impostazioni),
+                'carte' => wp_json_encode([]),
+                'modificato_il' => current_time('mysql')
+            ),
+            array('id' => intval($session_id)),
+            array('%s', '%s', '%s'),
+            array('%d')
+        );
+    }
+
+    /**
+     * Revoca (o elimina, se schema legacy) tutti gli inviti legati a una sessione.
+     */
+    private static function revoke_invites_for_session($session_id) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'scrivania_invitati';
+
+        $cols = $wpdb->get_col("DESC {$table}", 0);
+        $cols = is_array($cols) ? $cols : array();
+        $has_revoked_at = in_array('revoked_at', $cols, true);
+        $has_status = in_array('status', $cols, true);
+
+        if ($has_revoked_at || $has_status) {
+            $set = array();
+            $fmt = array();
+
+            if ($has_revoked_at) {
+                $set['revoked_at'] = current_time('mysql');
+                $fmt[] = '%s';
+            }
+            if ($has_status) {
+                $set['status'] = 'revoked';
+                $fmt[] = '%s';
+            }
+
+            $wpdb->update(
+                $table,
+                $set,
+                array('sessione_id' => intval($session_id)),
+                $fmt,
+                array('%d')
+            );
+            return;
+        }
+
+        // Schema legacy senza campi revoca: elimina gli inviti.
+        $wpdb->query($wpdb->prepare(
+            "DELETE FROM {$table} WHERE sessione_id = %d",
+            intval($session_id)
+        ));
+    }
+
+    /**
+     * Archivia tutte le sessioni precedenti del creatore (eccetto quella corrente) e revoca gli inviti associati.
+     */
+    private static function archive_previous_sessions_for_creator($creator_id, $keep_session_id) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'scrivania_sessioni';
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT id, impostazioni FROM {$table} WHERE creatore_id = %d AND id <> %d",
+                intval($creator_id),
+                intval($keep_session_id)
+            ),
+            ARRAY_A
+        );
+
+        if (empty($rows) || !is_array($rows)) {
+            return;
+        }
+
+        // Compat schema: state_version potrebbe non esistere.
+        $cols = $wpdb->get_col("DESC {$table}", 0);
+        $has_state_version = is_array($cols) && in_array('state_version', $cols, true);
+
+        foreach ($rows as $row) {
+            $sid = intval($row['id'] ?? 0);
+            if ($sid <= 0) {
+                continue;
+            }
+
+            $settings = array();
+            if (!empty($row['impostazioni'])) {
+                $decoded = json_decode($row['impostazioni'], true);
+                if (is_array($decoded)) {
+                    $settings = $decoded;
+                }
+            }
+
+            $settings['archived'] = true;
+            $settings['archived_at'] = current_time('mysql');
+
+            if ($has_state_version) {
+                $wpdb->query(
+                    $wpdb->prepare(
+                        "UPDATE {$table} SET impostazioni = %s, modificato_il = %s, state_version = state_version + 1 WHERE id = %d",
+                        wp_json_encode($settings),
+                        current_time('mysql'),
+                        $sid
+                    )
+                );
+            } else {
+                $wpdb->update(
+                    $table,
+                    array(
+                        'impostazioni' => wp_json_encode($settings),
+                        'modificato_il' => current_time('mysql')
+                    ),
+                    array('id' => $sid),
+                    array('%s', '%s'),
+                    array('%d')
+                );
+            }
+
+            self::revoke_invites_for_session($sid);
+        }
     }
 }
 

@@ -208,6 +208,25 @@ add_filter('manage_users_custom_column', function($value, $column_name, $user_id
 }, 10, 3);
 
 /**
+ * Tool Scrivania: nasconde la WP Admin Bar nel frontend.
+ *
+ * Alcuni utenti invitati (es. role subscriber) la vedono per impostazione profilo,
+ * e su una UI full-screen risulta invasiva.
+ */
+add_filter('show_admin_bar', function ($show) {
+    if (is_admin()) {
+        return $show;
+    }
+
+    $is_tool = is_page('tool-scrivania') || is_page_template('tool-scrivania.php');
+    if ($is_tool) {
+        return false;
+    }
+
+    return $show;
+}, 20);
+
+/**
  * Evita warning/errori CORS per font Elementor caricati da un dominio diverso.
  * Lo facciamo SOLO su /tool-scrivania per non impattare il resto del sito.
  */
