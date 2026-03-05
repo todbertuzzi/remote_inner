@@ -15,7 +15,44 @@ if (!is_user_logged_in()) {
 }
 
 $current_user = wp_get_current_user();
+
+// Gate: questa dashboard deve essere accessibile solo ad utenti con abbonamento attivo.
+// (Gli admin possono entrare comunque.)
+if (!function_exists('pmpro_getMembershipLevelForUser')) {
+    status_header(500);
+    get_header();
+    ?>
+    <main id="content" class="site-main">
+        <div class="dashboard-pro">
+            <h2>Gestione Abbonamento</h2>
+            <p>Il sistema abbonamenti non risulta disponibile in questo momento.</p>
+        </div>
+    </main>
+    <?php
+    get_footer();
+    exit;
+}
+
 $membership_level = pmpro_getMembershipLevelForUser($current_user->ID);
+if (empty($membership_level) && !current_user_can('manage_options')) {
+    status_header(403);
+
+    $levels_url = function_exists('pmpro_url') ? pmpro_url('levels') : home_url('/');
+
+    get_header();
+    ?>
+    <main id="content" class="site-main">
+        <div class="dashboard-pro">
+            <h2>Accesso riservato</h2>
+            <p>Questa pagina è disponibile solo per utenti con un abbonamento attivo.</p>
+            <p><a href="<?php echo esc_url($levels_url); ?>">Vai ai piani di abbonamento</a></p>
+        </div>
+    </main>
+    <?php
+    get_footer();
+    exit;
+}
+
 $categoria_slug = '';
 $limite_giochi = -1;
 
@@ -98,6 +135,7 @@ get_header(); ?>
         <div class="pmpro-membership-tabs">
             <button onclick="toggleTab('attivita')">📄 Attività</button>
             <button onclick="toggleTab('rubrica-contatti')">📄 Rubrica Contatti</button>
+            <button onclick="toggleTab('gestione-inviti')">📄 Gestione inviti</button>
             <button onclick="toggleTab('membership-info')">📄 Dettagli Abbonamento</button>
             <button onclick="toggleTab('invoice-history')">💳 Storico Pagamenti</button>
             <button onclick="toggleTab('change-level')">🔁 Cambia Piano</button>
@@ -148,6 +186,28 @@ get_header(); ?>
             <h3>Rubrica</h3>
             <div id="rubricaContatti">
                 <p>Caricamento contatti...</p>
+            </div>
+        </div>
+
+        <div id="gestione-inviti" class="pmpro-tab-content" style="display:none;">
+            <h3>Gestione Inviti (Scrivania)</h3>
+
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap: wrap; margin: 0.75rem 0 0.5rem;">
+                <div>
+                    <label for="scrivaniaSessionSelect" style="font-weight:600;">Sessione:</label>
+                    <select id="scrivaniaSessionSelect" style="margin-left:6px;"></select>
+                </div>
+
+                <a id="scrivaniaOpenToolLink" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">Apri la sessione</a>
+
+                <button id="openScrivaniaModalFromInvites" type="button">Invita al Tool</button>
+                <button id="scrivaniaInvitesRefresh" type="button">Aggiorna elenco</button>
+            </div>
+
+            <div id="scrivaniaInvitesMsg" style="margin: 0.5rem 0;"></div>
+
+            <div id="scrivaniaInvitesTableWrap">
+                <p>Caricamento inviti...</p>
             </div>
         </div>
 
@@ -216,10 +276,46 @@ get_header(); ?>
         border: 1px solid #ccc;
         background-color: #f9f9f9;
     } 
+
+    .scrivania-invites-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 0.75rem;
+        background: #fff;
+    }
+    .scrivania-invites-table th,
+    .scrivania-invites-table td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+        vertical-align: top;
+        font-size: 14px;
+    }
+    .scrivania-invites-table th {
+        background: #f3f3f3;
+        font-weight: 600;
+    }
+    .scrivania-invites-status {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid #ddd;
+        background: #fafafa;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+    }
+    .scrivania-invites-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
 </style>
 
 <script type="text/javascript">
     var ajaxurl = "<?php echo admin_url('admin-ajax.php'); ?>";
+    var scrivaniaDashboardInvitesNonce = "<?php echo esc_js(wp_create_nonce('scrivania_dashboard_invites')); ?>";
 </script>
 
 <script>
@@ -227,8 +323,38 @@ get_header(); ?>
         const tabs = document.querySelectorAll('.pmpro-tab-content');
         tabs.forEach(tab => tab.style.display = 'none');
         document.getElementById(id).style.display = 'block';
+
+        if (id === 'gestione-inviti' && typeof window.scrivaniaDashboardLoadInvites === 'function') {
+            window.scrivaniaDashboardLoadInvites();
+        }
     }
     jQuery(document).ready(function($) {
+        function escapeHtml(str) {
+            return String(str ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/\"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function setScrivaniaInvitesMsg(html, type) {
+            let color = '#444';
+            if (type === 'error') color = 'red';
+            if (type === 'success') color = 'green';
+            $('#scrivaniaInvitesMsg').html('<div style="color:' + color + ';">' + html + '</div>');
+        }
+
+        function openScrivaniaInviteModal() {
+            $.post(ajaxurl, {
+                action: 'carica_contatti_utente',
+                modal: true
+            }, function(data) {
+                $('#scrivaniaContattiList').html(data);
+                $('#scrivaniaInviteModal, #modalBackdrop').show();
+            });
+        }
+
         function caricaRubrica() {
             $.post(ajaxurl, {
                 action: 'carica_contatti_utente'
@@ -245,18 +371,9 @@ get_header(); ?>
                 $('#contattiModalList').html(data);
             });
         }
-       
-       
 
-        $('#openScrivaniaModal').on('click', function() {
-            $.post(ajaxurl, {
-                action: 'carica_contatti_utente',
-                modal: true
-            }, function(data) {
-                $('#scrivaniaContattiList').html(data);
-                $('#scrivaniaInviteModal, #modalBackdrop').show();
-            });
-        });
+            $('#openScrivaniaModal').on('click', openScrivaniaInviteModal);
+            $('#openScrivaniaModalFromInvites').on('click', openScrivaniaInviteModal);
 
         $('#closeScrivaniaModal, #modalBackdrop').on('click', function() {
             $('#scrivaniaInviteModal, #modalBackdrop').hide();
@@ -280,6 +397,237 @@ get_header(); ?>
                 ora_invito: ora
             }, function(response) {
                 $('#scrivaniaInviteResponse').html(response);
+
+                // Aggiorna la tab gestione-inviti se è aperta
+                if ($('#gestione-inviti').is(':visible') && typeof window.scrivaniaDashboardLoadInvites === 'function') {
+                    window.scrivaniaDashboardLoadInvites($('#scrivaniaSessionSelect').val());
+                }
+            });
+        });
+
+        function renderScrivaniaSessions(sessions, selectedSessionId) {
+            const $sel = $('#scrivaniaSessionSelect');
+            const current = String(selectedSessionId ?? '');
+
+            $sel.empty();
+            if (!sessions || sessions.length === 0) {
+                $sel.append('<option value="">Nessuna sessione</option>');
+                return;
+            }
+
+            sessions.forEach(s => {
+                const id = String(s.id);
+                const archived = s.archived ? ' (archiviata)' : '';
+                const name = s.name ? s.name : ('Sessione ' + id);
+                const created = s.created_at ? (' - ' + String(s.created_at).slice(0, 10)) : '';
+                const label = escapeHtml(name + ' #' + id + archived + created);
+                const selectedAttr = (id === current) ? ' selected' : '';
+                $sel.append('<option value="' + escapeHtml(id) + '"' + selectedAttr + '>' + label + '</option>');
+            });
+        }
+
+        function renderScrivaniaInvites(invites, features) {
+            if (!invites || invites.length === 0) {
+                $('#scrivaniaInvitesTableWrap').html('<p>Nessun invito trovato per questa sessione.</p>');
+                return;
+            }
+
+            const canRole = !!(features && features.role);
+            let html = '';
+            html += '<table class="scrivania-invites-table">';
+            html += '<thead><tr>';
+            html += '<th>Email</th>';
+            html += '<th>Ruolo</th>';
+            html += '<th>Stato</th>';
+            html += '<th>Invito</th>';
+            html += '<th>Azioni</th>';
+            html += '</tr></thead>';
+            html += '<tbody>';
+
+            invites.forEach(inv => {
+                const id = inv.id;
+                const email = escapeHtml(inv.email || '');
+                const role = String(inv.role || 'viewer');
+                const status = String(inv.status || 'pending');
+
+                const statusLabel = escapeHtml(status);
+                const statusPill = '<span class="scrivania-invites-status">' + statusLabel + '</span>';
+
+                const whenParts = [];
+                if (inv.data_invito) whenParts.push(escapeHtml(inv.data_invito));
+                if (inv.ora_invito) whenParts.push(escapeHtml(inv.ora_invito));
+                const whenStr = whenParts.length ? whenParts.join(' ') : '-';
+
+                let meta = '';
+                if (inv.invitato_name) {
+                    meta += '<div><strong>' + escapeHtml(inv.invitato_name) + '</strong></div>';
+                }
+                if (inv.invitato_user_id) {
+                    meta += '<div style="color:#666;">User ID: ' + escapeHtml(inv.invitato_user_id) + '</div>';
+                }
+                if (inv.last_sent_at) {
+                    meta += '<div style="color:#666;">Ultimo invio: ' + escapeHtml(inv.last_sent_at) + '</div>';
+                } else if (inv.created_at) {
+                    meta += '<div style="color:#666;">Creato: ' + escapeHtml(inv.created_at) + '</div>';
+                }
+                if (inv.resend_count !== null && inv.resend_count !== undefined) {
+                    meta += '<div style="color:#666;">Reinvii: ' + escapeHtml(inv.resend_count) + '</div>';
+                }
+
+                let roleCell = '-';
+                if (canRole) {
+                    const viewerSel = role === 'viewer' ? ' selected' : '';
+                    const editorSel = role === 'editor' ? ' selected' : '';
+                    roleCell = '' +
+                        '<select class="scrivaniaRoleSelect" data-invite-id="' + escapeHtml(id) + '">' +
+                        '<option value="viewer"' + viewerSel + '>viewer</option>' +
+                        '<option value="editor"' + editorSel + '>editor</option>' +
+                        '</select>';
+                }
+
+                const resendLabel = (status === 'revoked') ? 'Reinvita' : 'Reinvia';
+                const revokeDisabled = (status === 'revoked') ? ' disabled' : '';
+
+                html += '<tr>';
+                html += '<td>' + email + '</td>';
+                html += '<td>' + roleCell + '</td>';
+                html += '<td>' + statusPill + '</td>';
+                html += '<td>';
+                html += '<div><strong>Quando:</strong> ' + whenStr + '</div>';
+                html += meta;
+                html += '</td>';
+                html += '<td>';
+                html += '<div class="scrivania-invites-actions">';
+                html += '<button type="button" class="scrivaniaResendBtn" data-invite-id="' + escapeHtml(id) + '">' + resendLabel + '</button>';
+                html += '<button type="button" class="scrivaniaRevokeBtn" data-invite-id="' + escapeHtml(id) + '"' + revokeDisabled + '>Revoca</button>';
+                html += '</div>';
+                html += '</td>';
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            $('#scrivaniaInvitesTableWrap').html(html);
+        }
+
+        function updateScrivaniaToolLink(sessions, selectedSessionId) {
+            const $link = $('#scrivaniaOpenToolLink');
+            let url = null;
+            if (sessions && sessions.length) {
+                const sid = String(selectedSessionId);
+                const found = sessions.find(s => String(s.id) === sid);
+                if (found && found.tool_link) {
+                    url = found.tool_link;
+                }
+            }
+
+            if (url) {
+                $link.attr('href', url).show();
+            } else {
+                $link.attr('href', '#').hide();
+            }
+        }
+
+        function loadScrivaniaInvites(sessionId) {
+            setScrivaniaInvitesMsg('', '');
+            $('#scrivaniaInvitesTableWrap').html('<p>Caricamento inviti...</p>');
+
+            $.post(ajaxurl, {
+                action: 'scrivania_dashboard_get_invites',
+                nonce: scrivaniaDashboardInvitesNonce,
+                session_id: sessionId || ''
+            }, function(resp) {
+                if (!resp || !resp.success) {
+                    const msg = resp && resp.data && resp.data.message ? resp.data.message : 'Errore nel caricamento inviti.';
+                    setScrivaniaInvitesMsg(escapeHtml(msg), 'error');
+                    $('#scrivaniaInvitesTableWrap').html('<p>Impossibile caricare.</p>');
+                    return;
+                }
+
+                const data = resp.data || {};
+                renderScrivaniaSessions(data.sessions || [], data.selected_session_id || 0);
+                updateScrivaniaToolLink(data.sessions || [], data.selected_session_id || 0);
+                renderScrivaniaInvites(data.invites || [], data.features || {});
+            }, 'json').fail(function() {
+                setScrivaniaInvitesMsg('Errore di rete durante il caricamento.', 'error');
+                $('#scrivaniaInvitesTableWrap').html('<p>Impossibile caricare.</p>');
+            });
+        }
+
+        // Expose per toggleTab()
+        window.scrivaniaDashboardLoadInvites = loadScrivaniaInvites;
+
+        $('#scrivaniaInvitesRefresh').on('click', function() {
+            loadScrivaniaInvites($('#scrivaniaSessionSelect').val());
+        });
+
+        $('#scrivaniaSessionSelect').on('change', function() {
+            loadScrivaniaInvites($(this).val());
+        });
+
+        $('#scrivaniaInvitesTableWrap').on('change', '.scrivaniaRoleSelect', function() {
+            const inviteId = $(this).data('invite-id');
+            const role = $(this).val();
+            setScrivaniaInvitesMsg('Salvataggio ruolo...', '');
+
+            $.post(ajaxurl, {
+                action: 'scrivania_dashboard_update_invite_role',
+                nonce: scrivaniaDashboardInvitesNonce,
+                invite_id: inviteId,
+                role: role
+            }, function(resp) {
+                if (!resp || !resp.success) {
+                    const msg = resp && resp.data && resp.data.message ? resp.data.message : 'Errore nel salvataggio del ruolo.';
+                    setScrivaniaInvitesMsg(escapeHtml(msg), 'error');
+                    return;
+                }
+                setScrivaniaInvitesMsg('Ruolo aggiornato.', 'success');
+            }, 'json').fail(function() {
+                setScrivaniaInvitesMsg('Errore di rete durante il salvataggio.', 'error');
+            });
+        });
+
+        $('#scrivaniaInvitesTableWrap').on('click', '.scrivaniaRevokeBtn', function() {
+            const inviteId = $(this).data('invite-id');
+            if (!inviteId) return;
+            if (!confirm('Vuoi revocare questo invito?')) return;
+
+            setScrivaniaInvitesMsg('Revoca in corso...', '');
+            $.post(ajaxurl, {
+                action: 'scrivania_dashboard_revoke_invite',
+                nonce: scrivaniaDashboardInvitesNonce,
+                invite_id: inviteId
+            }, function(resp) {
+                if (!resp || !resp.success) {
+                    const msg = resp && resp.data && resp.data.message ? resp.data.message : 'Errore durante la revoca.';
+                    setScrivaniaInvitesMsg(escapeHtml(msg), 'error');
+                    return;
+                }
+                setScrivaniaInvitesMsg('Invito revocato.', 'success');
+                loadScrivaniaInvites($('#scrivaniaSessionSelect').val());
+            }, 'json').fail(function() {
+                setScrivaniaInvitesMsg('Errore di rete durante la revoca.', 'error');
+            });
+        });
+
+        $('#scrivaniaInvitesTableWrap').on('click', '.scrivaniaResendBtn', function() {
+            const inviteId = $(this).data('invite-id');
+            if (!inviteId) return;
+
+            setScrivaniaInvitesMsg('Invio email in corso...', '');
+            $.post(ajaxurl, {
+                action: 'scrivania_dashboard_resend_invite',
+                nonce: scrivaniaDashboardInvitesNonce,
+                invite_id: inviteId
+            }, function(resp) {
+                if (!resp || !resp.success) {
+                    const msg = resp && resp.data && resp.data.message ? resp.data.message : 'Errore durante l\'invio.';
+                    setScrivaniaInvitesMsg(escapeHtml(msg), 'error');
+                    return;
+                }
+                setScrivaniaInvitesMsg('Email inviata.', 'success');
+                loadScrivaniaInvites($('#scrivaniaSessionSelect').val());
+            }, 'json').fail(function() {
+                setScrivaniaInvitesMsg('Errore di rete durante l\'invio.', 'error');
             });
         });
 

@@ -3,6 +3,8 @@
  * Gestione delle chiamate AJAX per il Tool Scrivania
  */
 class Scrivania_Ajax {
+    private const DASHBOARD_INVITES_NONCE_ACTION = 'scrivania_dashboard_invites';
+
     /**
      * Ritorna un host "sicuro" per costruire URL assoluti coerenti con i cookie.
      * Se l'host corrente è equivalente a home/site (es. www/non-www), usa quello.
@@ -53,6 +55,541 @@ class Scrivania_Ajax {
         // Se per qualsiasi motivo i cookie non arrivano (cache/CDN/domain mismatch),
         // evita la risposta default "0" e torna un JSON chiaro.
         add_action('wp_ajax_nopriv_scrivania_rest_nonce', [self::class, 'rest_nonce']);
+
+        // Dashboard: gestione completa inviti Scrivania (solo creatore)
+        add_action('wp_ajax_scrivania_dashboard_get_invites', [self::class, 'dashboard_get_invites']);
+        add_action('wp_ajax_scrivania_dashboard_update_invite_role', [self::class, 'dashboard_update_invite_role']);
+        add_action('wp_ajax_scrivania_dashboard_revoke_invite', [self::class, 'dashboard_revoke_invite']);
+        add_action('wp_ajax_scrivania_dashboard_resend_invite', [self::class, 'dashboard_resend_invite']);
+    }
+
+    private static function dashboard_require_nonce() {
+        $nonce = isset($_POST['nonce']) ? (string) $_POST['nonce'] : '';
+        if (empty($nonce) || !wp_verify_nonce($nonce, self::DASHBOARD_INVITES_NONCE_ACTION)) {
+            wp_send_json_error(array('message' => 'Nonce non valido'), 403);
+            wp_die();
+        }
+    }
+
+    private static function get_owned_session($session_id, $user_id) {
+        global $wpdb;
+        $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
+        if ($session_id <= 0 || $user_id <= 0) {
+            return null;
+        }
+
+        $session = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT id, token, nome, impostazioni, creato_il, modificato_il FROM {$table_sessions} WHERE id = %d AND creatore_id = %d",
+                intval($session_id),
+                intval($user_id)
+            ),
+            ARRAY_A
+        );
+        return $session ?: null;
+    }
+
+    private static function parse_session_archived_flag($impostazioni_json) {
+        if (empty($impostazioni_json)) {
+            return false;
+        }
+        $decoded = json_decode((string) $impostazioni_json, true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+        return !empty($decoded['archived']);
+    }
+
+    private static function normalize_invite_status($row, $has_status, $has_verified_at, $has_consumed_at, $has_revoked_at) {
+        $status = $has_status && isset($row['status']) ? (string) $row['status'] : '';
+        $revoked_at = $has_revoked_at && !empty($row['revoked_at']);
+        $consumed_at = $has_consumed_at && !empty($row['consumed_at']);
+        $verified_at = $has_verified_at && !empty($row['verified_at']);
+
+        if ($revoked_at || $status === 'revoked') {
+            return 'revoked';
+        }
+        if ($consumed_at || $status === 'consumed') {
+            return 'consumed';
+        }
+        if ($verified_at || $status === 'verified') {
+            return 'verified';
+        }
+        return !empty($status) ? $status : 'pending';
+    }
+
+    private static function send_scrivania_invite_email($email, $token, $data, $ora) {
+        $link = home_url('/invito-scrivania/?token=' . $token);
+        $subject = 'Invito al Tool Scrivania';
+
+        $when = '';
+        if (!empty($data) && !empty($ora)) {
+            $when = '<p><strong>Quando:</strong> ' . date_i18n('d/m/Y', strtotime((string) $data)) . ' alle ' . esc_html((string) $ora) . '</p>';
+        }
+
+        $body =
+            '<p>Hai ricevuto un invito al Tool Scrivania!</p>' .
+            $when .
+            '<p><a href="' . esc_url($link) . '">Clicca qui per partecipare</a></p>';
+
+        $headers = ['Content-Type: text/html; charset=UTF-8'];
+        return wp_mail($email, $subject, $body, $headers);
+    }
+
+    /**
+     * Dashboard: lista sessioni (del creatore) + inviti della sessione selezionata.
+     */
+    public static function dashboard_get_invites() {
+        if (!is_user_logged_in()) {
+            wp_send_json_error(array('message' => 'Utente non loggato'), 401);
+            wp_die();
+        }
+
+        self::dashboard_require_nonce();
+
+        global $wpdb;
+        $user_id = get_current_user_id();
+        $requested_session_id = isset($_POST['session_id']) ? intval($_POST['session_id']) : 0;
+
+        $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
+        $table_invites = $wpdb->prefix . 'scrivania_invitati';
+
+        // Sessioni disponibili (ultime 30)
+        $session_rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT id, token, nome, impostazioni, creato_il, modificato_il FROM {$table_sessions} WHERE creatore_id = %d ORDER BY id DESC LIMIT 30",
+                intval($user_id)
+            ),
+            ARRAY_A
+        );
+        if (!is_array($session_rows)) {
+            $session_rows = array();
+        }
+
+        $sessions = array();
+        $session_ids = array();
+        foreach ($session_rows as $s) {
+            $sid = intval($s['id'] ?? 0);
+            if ($sid <= 0) {
+                continue;
+            }
+            $archived = self::parse_session_archived_flag($s['impostazioni'] ?? '');
+            $sessions[] = array(
+                'id' => $sid,
+                'name' => isset($s['nome']) ? (string) $s['nome'] : ('Sessione ' . $sid),
+                'archived' => $archived,
+                'created_at' => $s['creato_il'] ?? null,
+                'updated_at' => $s['modificato_il'] ?? null,
+                'tool_link' => !empty($s['token']) ? self::build_url_on_request_host('/tool-scrivania/?token=' . urlencode((string) $s['token'])) : null,
+            );
+            $session_ids[] = $sid;
+        }
+
+        $selected_session_id = 0;
+        if ($requested_session_id > 0 && in_array($requested_session_id, $session_ids, true)) {
+            $selected_session_id = $requested_session_id;
+        } elseif (!empty($session_ids)) {
+            $selected_session_id = intval($session_ids[0]);
+        }
+
+        if ($selected_session_id <= 0) {
+            wp_send_json_success(array(
+                'sessions' => $sessions,
+                'selected_session_id' => 0,
+                'invites' => array(),
+                'features' => array('role' => false, 'status' => false, 'revoked_at' => false, 'verified_at' => false, 'consumed_at' => false, 'last_sent_at' => false, 'resend_count' => false),
+            ));
+            wp_die();
+        }
+
+        // Feature detection (compat schema)
+        $cols = $wpdb->get_col("DESC {$table_invites}", 0);
+        $cols = is_array($cols) ? $cols : array();
+        $has_role = in_array('role', $cols, true);
+        $has_status = in_array('status', $cols, true);
+        $has_revoked_at = in_array('revoked_at', $cols, true);
+        $has_verified_at = in_array('verified_at', $cols, true);
+        $has_consumed_at = in_array('consumed_at', $cols, true);
+        $has_last_sent_at = in_array('last_sent_at', $cols, true);
+        $has_resend_count = in_array('resend_count', $cols, true);
+        $has_invitato_user_id = in_array('invitato_user_id', $cols, true);
+
+        // Lista inviti: un record per email (ultimo invito per email) nella sessione selezionata.
+        $invites_sql = $wpdb->prepare(
+            "SELECT i.*\n" .
+            "FROM {$table_invites} i\n" .
+            "INNER JOIN (\n" .
+            "  SELECT MAX(id) AS id\n" .
+            "  FROM {$table_invites}\n" .
+            "  WHERE sessione_id = %d AND invitante_id = %d\n" .
+            "  GROUP BY LOWER(invitato_email)\n" .
+            ") latest ON i.id = latest.id\n" .
+            "ORDER BY i.id DESC",
+            intval($selected_session_id),
+            intval($user_id)
+        );
+        $rows = $wpdb->get_results($invites_sql, ARRAY_A);
+        if (!is_array($rows)) {
+            $rows = array();
+        }
+
+        $invites = array();
+        foreach ($rows as $row) {
+            $invite_user_id = $has_invitato_user_id ? intval($row['invitato_user_id'] ?? 0) : 0;
+            $invite_user_name = null;
+            if ($invite_user_id > 0) {
+                $ud = get_userdata($invite_user_id);
+                if ($ud) {
+                    $invite_user_name = $ud->display_name;
+                }
+            }
+
+            $invites[] = array(
+                'id' => intval($row['id'] ?? 0),
+                'email' => isset($row['invitato_email']) ? (string) $row['invitato_email'] : '',
+                'role' => $has_role && !empty($row['role']) ? (string) $row['role'] : 'viewer',
+                'status' => self::normalize_invite_status($row, $has_status, $has_verified_at, $has_consumed_at, $has_revoked_at),
+                'data_invito' => $row['data_invito'] ?? null,
+                'ora_invito' => $row['ora_invito'] ?? null,
+                'created_at' => $row['creato_il'] ?? null,
+                'verified_at' => $has_verified_at ? ($row['verified_at'] ?? null) : null,
+                'consumed_at' => $has_consumed_at ? ($row['consumed_at'] ?? null) : null,
+                'revoked_at' => $has_revoked_at ? ($row['revoked_at'] ?? null) : null,
+                'last_sent_at' => $has_last_sent_at ? ($row['last_sent_at'] ?? null) : null,
+                'resend_count' => $has_resend_count ? intval($row['resend_count'] ?? 0) : null,
+                'invitato_user_id' => $invite_user_id ?: null,
+                'invitato_name' => $invite_user_name,
+            );
+        }
+
+        wp_send_json_success(array(
+            'sessions' => $sessions,
+            'selected_session_id' => $selected_session_id,
+            'invites' => $invites,
+            'features' => array(
+                'role' => $has_role,
+                'status' => $has_status,
+                'revoked_at' => $has_revoked_at,
+                'verified_at' => $has_verified_at,
+                'consumed_at' => $has_consumed_at,
+                'last_sent_at' => $has_last_sent_at,
+                'resend_count' => $has_resend_count,
+            ),
+        ));
+        wp_die();
+    }
+
+    public static function dashboard_update_invite_role() {
+        if (!is_user_logged_in()) {
+            wp_send_json_error(array('message' => 'Utente non loggato'), 401);
+            wp_die();
+        }
+        self::dashboard_require_nonce();
+
+        $invite_id = isset($_POST['invite_id']) ? intval($_POST['invite_id']) : 0;
+        $new_role = isset($_POST['role']) ? sanitize_text_field((string) $_POST['role']) : '';
+        if ($invite_id <= 0 || !in_array($new_role, array('viewer', 'editor'), true)) {
+            wp_send_json_error(array('message' => 'Parametri non validi'), 400);
+            wp_die();
+        }
+
+        global $wpdb;
+        $user_id = get_current_user_id();
+        $table_invites = $wpdb->prefix . 'scrivania_invitati';
+
+        $cols = $wpdb->get_col("DESC {$table_invites}", 0);
+        $cols = is_array($cols) ? $cols : array();
+        if (!in_array('role', $cols, true)) {
+            wp_send_json_error(array('message' => 'Schema non supporta la modifica del ruolo'), 500);
+            wp_die();
+        }
+
+        $invite = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$table_invites} WHERE id = %d", intval($invite_id)),
+            ARRAY_A
+        );
+        if (!$invite) {
+            wp_send_json_error(array('message' => 'Invito non trovato'), 404);
+            wp_die();
+        }
+
+        $session_id = intval($invite['sessione_id'] ?? 0);
+        $email = isset($invite['invitato_email']) ? (string) $invite['invitato_email'] : '';
+        $target_user_id = in_array('invitato_user_id', $cols, true) ? intval($invite['invitato_user_id'] ?? 0) : 0;
+
+        $session = self::get_owned_session($session_id, $user_id);
+        if (!$session) {
+            wp_send_json_error(array('message' => 'Non autorizzato'), 403);
+            wp_die();
+        }
+
+        // Aggiorna tutte le righe di quell'email nella sessione (e anche per user_id se presente).
+        $wpdb->query(
+            $wpdb->prepare(
+                "UPDATE {$table_invites} SET role = %s WHERE sessione_id = %d AND LOWER(invitato_email) = LOWER(%s)",
+                $new_role,
+                $session_id,
+                $email
+            )
+        );
+
+        if ($target_user_id > 0) {
+            $wpdb->update(
+                $table_invites,
+                array('role' => $new_role),
+                array('sessione_id' => $session_id, 'invitato_user_id' => $target_user_id),
+                array('%s'),
+                array('%d', '%d')
+            );
+        }
+
+        wp_send_json_success(array('message' => 'Ruolo aggiornato'));
+        wp_die();
+    }
+
+    public static function dashboard_revoke_invite() {
+        if (!is_user_logged_in()) {
+            wp_send_json_error(array('message' => 'Utente non loggato'), 401);
+            wp_die();
+        }
+        self::dashboard_require_nonce();
+
+        $invite_id = isset($_POST['invite_id']) ? intval($_POST['invite_id']) : 0;
+        if ($invite_id <= 0) {
+            wp_send_json_error(array('message' => 'Parametri non validi'), 400);
+            wp_die();
+        }
+
+        global $wpdb;
+        $user_id = get_current_user_id();
+        $table_invites = $wpdb->prefix . 'scrivania_invitati';
+
+        $invite = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$table_invites} WHERE id = %d", intval($invite_id)),
+            ARRAY_A
+        );
+        if (!$invite) {
+            wp_send_json_error(array('message' => 'Invito non trovato'), 404);
+            wp_die();
+        }
+
+        $session_id = intval($invite['sessione_id'] ?? 0);
+        $email = isset($invite['invitato_email']) ? (string) $invite['invitato_email'] : '';
+
+        $session = self::get_owned_session($session_id, $user_id);
+        if (!$session) {
+            wp_send_json_error(array('message' => 'Non autorizzato'), 403);
+            wp_die();
+        }
+
+        $cols = $wpdb->get_col("DESC {$table_invites}", 0);
+        $cols = is_array($cols) ? $cols : array();
+        $has_revoked_at = in_array('revoked_at', $cols, true);
+        $has_status = in_array('status', $cols, true);
+        $has_invitato_user_id = in_array('invitato_user_id', $cols, true);
+
+        $target_user_id = ($has_invitato_user_id) ? intval($invite['invitato_user_id'] ?? 0) : 0;
+
+        if (!$has_revoked_at && !$has_status) {
+            // Schema legacy: revoca = elimina.
+            $wpdb->query(
+                $wpdb->prepare(
+                    "DELETE FROM {$table_invites} WHERE sessione_id = %d AND LOWER(invitato_email) = LOWER(%s)",
+                    $session_id,
+                    $email
+                )
+            );
+            if ($target_user_id > 0) {
+                $wpdb->query(
+                    $wpdb->prepare(
+                        "DELETE FROM {$table_invites} WHERE sessione_id = %d AND invitato_user_id = %d",
+                        $session_id,
+                        $target_user_id
+                    )
+                );
+            }
+
+            wp_send_json_success(array('message' => 'Invito revocato'));
+            wp_die();
+        }
+
+        $set_parts = array();
+        $params = array();
+        if ($has_revoked_at) {
+            $set_parts[] = 'revoked_at = %s';
+            $params[] = current_time('mysql');
+        }
+        if ($has_status) {
+            $set_parts[] = 'status = %s';
+            $params[] = 'revoked';
+        }
+
+        $sql = "UPDATE {$table_invites} SET " . implode(', ', $set_parts) . " WHERE sessione_id = %d AND LOWER(invitato_email) = LOWER(%s)";
+        $params[] = $session_id;
+        $params[] = $email;
+        $wpdb->query($wpdb->prepare($sql, ...$params));
+
+        if ($target_user_id > 0) {
+            $wpdb->update(
+                $table_invites,
+                array_filter(array(
+                    'revoked_at' => $has_revoked_at ? current_time('mysql') : null,
+                    'status' => $has_status ? 'revoked' : null,
+                ), function ($v) {
+                    return $v !== null;
+                }),
+                array('sessione_id' => $session_id, 'invitato_user_id' => $target_user_id),
+                array_values(array_filter(array(
+                    $has_revoked_at ? '%s' : null,
+                    $has_status ? '%s' : null,
+                ))),
+                array('%d', '%d')
+            );
+        }
+
+        wp_send_json_success(array('message' => 'Invito revocato'));
+        wp_die();
+    }
+
+    public static function dashboard_resend_invite() {
+        if (!is_user_logged_in()) {
+            wp_send_json_error(array('message' => 'Utente non loggato'), 401);
+            wp_die();
+        }
+        self::dashboard_require_nonce();
+
+        $invite_id = isset($_POST['invite_id']) ? intval($_POST['invite_id']) : 0;
+        if ($invite_id <= 0) {
+            wp_send_json_error(array('message' => 'Parametri non validi'), 400);
+            wp_die();
+        }
+
+        global $wpdb;
+        $user_id = get_current_user_id();
+        $table_invites = $wpdb->prefix . 'scrivania_invitati';
+
+        $cols = $wpdb->get_col("DESC {$table_invites}", 0);
+        $cols = is_array($cols) ? $cols : array();
+        $has_status = in_array('status', $cols, true);
+        $has_revoked_at = in_array('revoked_at', $cols, true);
+        $has_last_sent_at = in_array('last_sent_at', $cols, true);
+        $has_resend_count = in_array('resend_count', $cols, true);
+        $has_role = in_array('role', $cols, true);
+        $has_token_hash = in_array('token_hash', $cols, true);
+        $has_invitato_user_id = in_array('invitato_user_id', $cols, true);
+
+        $invite = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$table_invites} WHERE id = %d", intval($invite_id)),
+            ARRAY_A
+        );
+        if (!$invite) {
+            wp_send_json_error(array('message' => 'Invito non trovato'), 404);
+            wp_die();
+        }
+
+        $session_id = intval($invite['sessione_id'] ?? 0);
+        $email = isset($invite['invitato_email']) ? (string) $invite['invitato_email'] : '';
+        $data = isset($invite['data_invito']) ? (string) $invite['data_invito'] : '';
+        $ora = isset($invite['ora_invito']) ? (string) $invite['ora_invito'] : '';
+        $role = ($has_role && !empty($invite['role'])) ? (string) $invite['role'] : 'viewer';
+        $target_user_id = ($has_invitato_user_id) ? intval($invite['invitato_user_id'] ?? 0) : 0;
+
+        $session = self::get_owned_session($session_id, $user_id);
+        if (!$session) {
+            wp_send_json_error(array('message' => 'Non autorizzato'), 403);
+            wp_die();
+        }
+
+        $is_revoked = false;
+        if ($has_revoked_at && !empty($invite['revoked_at'])) {
+            $is_revoked = true;
+        }
+        if (!$is_revoked && $has_status && !empty($invite['status']) && (string) $invite['status'] === 'revoked') {
+            $is_revoked = true;
+        }
+
+        $token_to_send = isset($invite['token']) ? (string) $invite['token'] : '';
+        $new_invite_id = 0;
+
+        if ($is_revoked) {
+            // Re-invita: crea un nuovo token e una nuova riga (lascia la vecchia revocata).
+            $token_to_send = wp_generate_password(16, false);
+            $token_hash = $has_token_hash ? hash_hmac('sha256', $token_to_send, wp_salt('auth')) : null;
+
+            $insert = array(
+                'sessione_id' => $session_id,
+                'token' => $token_to_send,
+                'invitante_id' => $user_id,
+                'invitato_email' => $email,
+                'data_invito' => $data,
+                'ora_invito' => $ora,
+                'role' => $role,
+                'status' => 'pending',
+                'token_hash' => $token_hash,
+                'last_sent_at' => current_time('mysql'),
+                'resend_count' => 0,
+                'invitato_user_id' => $target_user_id ?: null,
+            );
+
+            foreach (array_keys($insert) as $k) {
+                if (!in_array($k, $cols, true)) {
+                    unset($insert[$k]);
+                }
+            }
+
+            $ok = $wpdb->insert($table_invites, $insert);
+            if ($ok === false) {
+                wp_send_json_error(array('message' => 'Errore DB durante reinvito'), 500);
+                wp_die();
+            }
+            $new_invite_id = intval($wpdb->insert_id);
+        } else {
+            // Reinvia: stesso token, aggiorna tracking se possibile.
+            if ($has_resend_count) {
+                // Incrementa in modo atomico
+                if ($has_last_sent_at) {
+                    $wpdb->query(
+                        $wpdb->prepare(
+                            "UPDATE {$table_invites} SET resend_count = resend_count + 1, last_sent_at = %s WHERE id = %d",
+                            current_time('mysql'),
+                            intval($invite_id)
+                        )
+                    );
+                } else {
+                    $wpdb->query(
+                        $wpdb->prepare(
+                            "UPDATE {$table_invites} SET resend_count = resend_count + 1 WHERE id = %d",
+                            intval($invite_id)
+                        )
+                    );
+                }
+            } elseif ($has_last_sent_at) {
+                $wpdb->update(
+                    $table_invites,
+                    array('last_sent_at' => current_time('mysql')),
+                    array('id' => intval($invite_id)),
+                    array('%s'),
+                    array('%d')
+                );
+            }
+        }
+
+        if (empty($email) || empty($token_to_send)) {
+            wp_send_json_error(array('message' => 'Dati invito incompleti'), 500);
+            wp_die();
+        }
+
+        $sent = self::send_scrivania_invite_email($email, $token_to_send, $data, $ora);
+        if (!$sent) {
+            wp_send_json_error(array('message' => 'Invio email fallito'), 500);
+            wp_die();
+        }
+
+        wp_send_json_success(array(
+            'message' => $is_revoked ? 'Reinvito inviato' : 'Invito reinviato',
+            'new_invite_id' => $new_invite_id ?: null,
+        ));
+        wp_die();
     }
 
     /**
