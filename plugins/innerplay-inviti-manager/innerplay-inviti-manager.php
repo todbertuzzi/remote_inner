@@ -103,8 +103,112 @@ function gim_install_game_sessions_schema() {
             $wpdb->query("ALTER TABLE {$table_inviti_gioco} DROP INDEX `{$idx}`");
         }
     }
+
+    gim_ensure_contacts_table();
 }
 register_activation_hook(__FILE__, 'gim_install_game_sessions_schema');
+
+function gim_ensure_contacts_table() {
+    static $table_ready = null;
+
+    if ($table_ready === true) {
+        return true;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'contatti_utente';
+    $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
+    if (!empty($exists)) {
+        $table_ready = true;
+        return true;
+    }
+
+    $charset_collate = $wpdb->get_charset_collate();
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+    $sql = "CREATE TABLE {$table} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        utente_id BIGINT UNSIGNED NOT NULL,
+        nome VARCHAR(191) NOT NULL,
+        email VARCHAR(191) NOT NULL,
+        creato_il DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY utente_id (utente_id),
+        KEY utente_email (utente_id, email)
+    ) {$charset_collate};";
+
+    dbDelta($sql);
+
+    $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
+    $table_ready = !empty($exists);
+    return $table_ready;
+}
+
+function cim_rubrica_feedback($message, $status = 'info') {
+    $colors = array(
+        'success' => 'green',
+        'warning' => 'orange',
+        'error' => 'red',
+        'info' => '#444',
+    );
+
+    $color = isset($colors[$status]) ? $colors[$status] : $colors['info'];
+
+    echo '<div class="rubrica-feedback" data-status="' . esc_attr($status) . '" style="color:' . esc_attr($color) . ';">' . esc_html($message) . '</div>';
+}
+
+function gim_get_wp_timezone() {
+    if (function_exists('wp_timezone')) {
+        return wp_timezone();
+    }
+
+    $timezone_string = function_exists('wp_timezone_string') ? wp_timezone_string() : '';
+    if (empty($timezone_string)) {
+        $timezone_string = 'UTC';
+    }
+
+    try {
+        return new DateTimeZone($timezone_string);
+    } catch (Exception $e) {
+        return new DateTimeZone('UTC');
+    }
+}
+
+function gim_parse_scrivania_schedule($data, $ora) {
+    $date = trim((string) $data);
+    $time = trim((string) $ora);
+
+    if ($date === '' || $time === '') {
+        return null;
+    }
+
+    $timezone = gim_get_wp_timezone();
+    $formats = array('Y-m-d H:i:s', 'Y-m-d H:i');
+
+    foreach ($formats as $format) {
+        $dt = DateTimeImmutable::createFromFormat('!' . $format, $date . ' ' . $time, $timezone);
+        $errors = DateTimeImmutable::getLastErrors();
+        $has_errors = is_array($errors) && (!empty($errors['warning_count']) || !empty($errors['error_count']));
+        if ($dt instanceof DateTimeImmutable && !$has_errors) {
+            return $dt;
+        }
+    }
+
+    return null;
+}
+
+function gim_format_scrivania_schedule_html($data, $ora) {
+    $scheduled_at = gim_parse_scrivania_schedule($data, $ora);
+    if (!$scheduled_at) {
+        return '';
+    }
+
+    $date_label = function_exists('wp_date')
+        ? wp_date('d/m/Y', $scheduled_at->getTimestamp(), gim_get_wp_timezone())
+        : date_i18n('d/m/Y', $scheduled_at->getTimestamp());
+
+    return '<p><strong>Quando:</strong> ' . esc_html($date_label) . ' alle ' . esc_html($scheduled_at->format('H:i')) . '</p>';
+}
 
 
 
@@ -196,6 +300,15 @@ function gim_attiva_scrivania() {
         wp_die();
     }
 
+    $scheduled_at = gim_parse_scrivania_schedule($data, $ora);
+    if (!$scheduled_at) {
+        echo '<div style="color:red;">Data o orario non validi.</div>';
+        wp_die();
+    }
+
+    $data = $scheduled_at->format('Y-m-d');
+    $ora = $scheduled_at->format('H:i');
+
     $emails = array_filter(array_map('sanitize_email', $emails));
     if (empty($emails)) {
         echo '<div style="color:red;">Nessun contatto valido.</div>';
@@ -248,7 +361,7 @@ function gim_attiva_scrivania() {
         $subject = 'Invito al Tool Scrivania';
         $body = '
             <p>Hai ricevuto un invito al Tool Scrivania!</p>
-            <p><strong>Quando:</strong> ' . date_i18n('d/m/Y', strtotime($data)) . ' alle ' . esc_html($ora) . '</p>
+            ' . gim_format_scrivania_schedule_html($data, $ora) . '
             <p><a href="' . esc_url($link) . '">Clicca qui per partecipare</a></p>
         ';
         $headers = ['Content-Type: text/html; charset=UTF-8'];
@@ -405,13 +518,29 @@ function cim_aggiungi_contatto_utente()
         wp_die('Non autorizzato');
     }
 
+    if (!check_ajax_referer('rubrica_contatti', 'nonce', false)) {
+        cim_rubrica_feedback('Sessione scaduta. Ricarica la pagina e riprova.', 'error');
+        wp_die();
+    }
+
     global $wpdb;
+
+    if (!gim_ensure_contacts_table()) {
+        cim_rubrica_feedback('Rubrica non disponibile in questo momento.', 'error');
+        wp_die();
+    }
+
     $user_id = get_current_user_id();
-    $nome = sanitize_text_field($_POST['nome']);
-    $email = sanitize_email($_POST['email']);
+    $nome = isset($_POST['nome']) ? sanitize_text_field(wp_unslash($_POST['nome'])) : '';
+    $email = isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '';
+
+    if ($nome === '') {
+        cim_rubrica_feedback('Inserisci un nome.', 'error');
+        wp_die();
+    }
 
     if (!is_email($email)) {
-        echo '<div style="color:red;">Email non valida.</div>';
+        cim_rubrica_feedback('Email non valida.', 'error');
         wp_die();
     }
 
@@ -419,23 +548,82 @@ function cim_aggiungi_contatto_utente()
 
     // Verifica se esiste già
     $exists = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM $table WHERE utente_id = %d AND email = %s",
+        "SELECT COUNT(*) FROM $table WHERE utente_id = %d AND LOWER(email) = LOWER(%s)",
         $user_id,
         $email
     ));
 
     if ($exists) {
-        echo '<div style="color:orange;">Questo contatto è già presente.</div>';
+        cim_rubrica_feedback('Questo contatto è già presente.', 'warning');
         wp_die();
     }
 
-    $wpdb->insert($table, [
+    $inserted = $wpdb->insert($table, [
         'utente_id' => $user_id,
         'nome' => $nome,
         'email' => $email
-    ]);
+    ], ['%d', '%s', '%s']);
 
-    echo '<div style="color:green;">Contatto aggiunto correttamente.</div>';
+    if ($inserted === false) {
+        cim_rubrica_feedback('Errore durante il salvataggio del contatto.', 'error');
+        wp_die();
+    }
+
+    cim_rubrica_feedback('Contatto aggiunto correttamente.', 'success');
+    wp_die();
+}
+
+/**
+ * Funzione AJAX per eliminare un contatto dalla rubrica personale.
+ *
+ * Chiamata tramite AJAX con `action: 'elimina_contatto_utente'`.
+ */
+add_action('wp_ajax_elimina_contatto_utente', 'cim_elimina_contatto_utente');
+
+function cim_elimina_contatto_utente()
+{
+    if (!is_user_logged_in()) {
+        wp_die('Non autorizzato');
+    }
+
+    if (!check_ajax_referer('rubrica_contatti', 'nonce', false)) {
+        cim_rubrica_feedback('Sessione scaduta. Ricarica la pagina e riprova.', 'error');
+        wp_die();
+    }
+
+    global $wpdb;
+
+    if (!gim_ensure_contacts_table()) {
+        cim_rubrica_feedback('Rubrica non disponibile in questo momento.', 'error');
+        wp_die();
+    }
+
+    $user_id = get_current_user_id();
+    $email = isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '';
+
+    if (!is_email($email)) {
+        cim_rubrica_feedback('Contatto non valido.', 'error');
+        wp_die();
+    }
+
+    $table = $wpdb->prefix . 'contatti_utente';
+    $deleted = $wpdb->query($wpdb->prepare(
+        "DELETE FROM $table WHERE utente_id = %d AND LOWER(email) = LOWER(%s) LIMIT 1",
+        $user_id,
+        $email
+    ));
+
+    if ($deleted === false) {
+        cim_rubrica_feedback('Errore durante l\'eliminazione del contatto.', 'error');
+        wp_die();
+    }
+
+    if ((int) $deleted === 0) {
+        cim_rubrica_feedback('Contatto non trovato.', 'warning');
+        wp_die();
+    }
+
+    cim_rubrica_feedback('Contatto eliminato correttamente.', 'success');
     wp_die();
 }
 
@@ -459,6 +647,12 @@ function cim_carica_contatti_utente()
     }
 
     global $wpdb;
+
+    if (!gim_ensure_contacts_table()) {
+        echo '<p style="color:red;">Rubrica non disponibile in questo momento.</p>';
+        wp_die();
+    }
+
     $user_id = get_current_user_id();
     $table = $wpdb->prefix . 'contatti_utente';
 
@@ -466,6 +660,11 @@ function cim_carica_contatti_utente()
         "SELECT * FROM $table WHERE utente_id = %d ORDER BY nome ASC",
         $user_id
     ));
+
+    if ($contatti === null) {
+        echo '<p style="color:red;">Errore nel caricamento contatti.</p>';
+        wp_die();
+    }
 
     if (isset($_POST['modal'])) {
         // Vista per la modale (checkbox)
@@ -484,13 +683,19 @@ function cim_carica_contatti_utente()
     } else {
         // Vista rubrica
         if (!$contatti) {
-            echo '<p>La rubrica è vuota.</p>';
+            echo '<p class="rubrica-empty-state">La rubrica è vuota.</p>';
         } else {
-            echo '<ul>';
+            echo '<div class="rubrica-contact-list">';
             foreach ($contatti as $c) {
-                echo '<li><strong>' . esc_html($c->nome) . '</strong> &lt;' . esc_html($c->email) . '&gt;</li>';
+                echo '<div class="rubrica-contact-item">';
+                echo '<div class="rubrica-contact-main">';
+                echo '<strong class="rubrica-contact-name">' . esc_html($c->nome) . '</strong>';
+                echo '<span class="rubrica-contact-email">' . esc_html($c->email) . '</span>';
+                echo '</div>';
+                echo '<button type="button" class="rubrica-delete-btn" data-contact-name="' . esc_attr($c->nome) . '" data-contact-email="' . esc_attr($c->email) . '">Elimina</button>';
+                echo '</div>';
             }
-            echo '</ul>';
+            echo '</div>';
         }
     }
 

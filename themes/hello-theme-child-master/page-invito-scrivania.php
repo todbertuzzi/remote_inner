@@ -53,6 +53,73 @@ function scrivania_invite_build_url_on_request_host($path_with_query) {
     return $scheme . '://' . $host . $path_with_query;
 }
 
+function scrivania_invite_get_wp_timezone() {
+    if (function_exists('wp_timezone')) {
+        return wp_timezone();
+    }
+
+    $timezone_string = function_exists('wp_timezone_string') ? wp_timezone_string() : '';
+    if (empty($timezone_string)) {
+        $timezone_string = 'UTC';
+    }
+
+    try {
+        return new DateTimeZone($timezone_string);
+    } catch (Exception $e) {
+        return new DateTimeZone('UTC');
+    }
+}
+
+function scrivania_invite_parse_schedule($data, $ora) {
+    $date = trim((string) $data);
+    $time = trim((string) $ora);
+
+    if ($date === '' || $time === '') {
+        return null;
+    }
+
+    $timezone = scrivania_invite_get_wp_timezone();
+    $formats = array('Y-m-d H:i:s', 'Y-m-d H:i');
+
+    foreach ($formats as $format) {
+        $dt = DateTimeImmutable::createFromFormat('!' . $format, $date . ' ' . $time, $timezone);
+        $errors = DateTimeImmutable::getLastErrors();
+        $has_errors = is_array($errors) && (!empty($errors['warning_count']) || !empty($errors['error_count']));
+        if ($dt instanceof DateTimeImmutable && !$has_errors) {
+            return $dt;
+        }
+    }
+
+    return null;
+}
+
+function scrivania_invite_format_schedule_label($scheduled_at) {
+    if (!$scheduled_at instanceof DateTimeImmutable) {
+        return '';
+    }
+
+    $date_label = function_exists('wp_date')
+        ? wp_date('d/m/Y', $scheduled_at->getTimestamp(), scrivania_invite_get_wp_timezone())
+        : date_i18n('d/m/Y', $scheduled_at->getTimestamp());
+
+    return $date_label . ' alle ' . $scheduled_at->format('H:i');
+}
+
+function scrivania_invite_render_not_active_yet($scheduled_at) {
+    $when_label = scrivania_invite_format_schedule_label($scheduled_at);
+    echo '<div class="site-main"><div class="container" style="max-width:700px; margin:0 auto; padding:2rem;">';
+    echo '<h2>Invito non ancora attivo</h2>';
+    if ($when_label !== '') {
+        echo '<p>Questa scrivania sara disponibile dal <strong>' . esc_html($when_label) . '</strong>.</p>';
+    } else {
+        echo '<p>Questa scrivania non e ancora disponibile.</p>';
+    }
+    echo '<p>Torna su questa pagina all\'orario previsto per accedere.</p>';
+    echo '</div></div>';
+    get_footer();
+    exit;
+}
+
 $token = isset($_GET['token']) ? sanitize_text_field($_GET['token']) : '';
 
 if (!$token) {
@@ -73,6 +140,12 @@ if (!$invito) {
     get_footer();
     exit;
 }
+
+$scheduled_at = scrivania_invite_parse_schedule($invito->data_invito ?? '', $invito->ora_invito ?? '');
+$now = function_exists('current_datetime')
+    ? current_datetime()
+    : new DateTimeImmutable('now', scrivania_invite_get_wp_timezone());
+$invite_not_active_yet = $scheduled_at instanceof DateTimeImmutable && $scheduled_at > $now;
 
 // Revocato?
 if (!empty($invito->revoked_at) || (!empty($invito->status) && $invito->status === 'revoked')) {
@@ -108,6 +181,10 @@ if (!empty($invito->consumed_at) || (!empty($invito->status) && $invito->status 
     }
 
     // Redirect al tool con token sessione
+    if ($invite_not_active_yet) {
+        scrivania_invite_render_not_active_yet($scheduled_at);
+    }
+
     $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
     $session = $wpdb->get_row($wpdb->prepare("SELECT token FROM $table_sessions WHERE id = %d", intval($invito->sessione_id)));
     if ($session && !empty($session->token)) {
@@ -241,6 +318,10 @@ if (strtolower($current_user->user_email) !== strtolower($invito->invitato_email
     echo '</div></div>';
     get_footer();
     exit;
+}
+
+if ($invite_not_active_yet) {
+    scrivania_invite_render_not_active_yet($scheduled_at);
 }
 
 // Claim + consume (one-time): lega l'invito al user_id e consuma il token

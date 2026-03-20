@@ -176,9 +176,9 @@ get_header(); ?>
 
         <div id="rubrica-contatti" class="pmpro-tab-content" style="display:none;">
             <h3>Aggiungi Contatto</h3>
-            <form id="aggiungiContattoForm">
-                <input type="text" id="contatto_nome" placeholder="Nome" required>
-                <input type="email" id="contatto_email" placeholder="Email" required>
+            <form id="aggiungiContattoForm" action="#" method="post">
+                <input type="text" id="contatto_nome" name="nome" placeholder="Nome" required>
+                <input type="email" id="contatto_email" name="email" placeholder="Email" required>
                 <button type="submit">Aggiungi contatto</button>
             </form>
             <div id="rubrica_msg"></div>
@@ -264,6 +264,10 @@ get_header(); ?>
 
 
 <style>
+
+    #contatto_nome, #contatto_email {
+        margin-bottom: 5px;
+    }
     .pmpro-membership-tabs button {
         margin: 0.5rem;
         padding: 0.5rem 1rem;
@@ -276,6 +280,60 @@ get_header(); ?>
         border: 1px solid #ccc;
         background-color: #f9f9f9;
     } 
+
+    .rubrica-contact-list {
+        display: grid;
+        gap: 12px;
+        margin-top: 0.75rem;
+    }
+    .rubrica-contact-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        background: #fff;
+    }
+    .rubrica-contact-main {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+    }
+    .rubrica-contact-name {
+        font-weight: 600;
+        color: #111;
+    }
+    .rubrica-contact-email {
+        color: #555;
+        word-break: break-all;
+    }
+    .rubrica-delete-btn {
+        border: 1px solid #d9a29a;
+        background: #fff2ef;
+        color: #9f2d1b;
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+    .rubrica-delete-btn:disabled {
+        opacity: 0.65;
+        cursor: wait;
+    }
+    .rubrica-empty-state {
+        margin: 0;
+        color: #666;
+    }
+    @media (max-width: 640px) {
+        .rubrica-contact-item {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
 
     .scrivania-invites-table {
         width: 100%;
@@ -316,6 +374,7 @@ get_header(); ?>
 <script type="text/javascript">
     var ajaxurl = "<?php echo admin_url('admin-ajax.php'); ?>";
     var scrivaniaDashboardInvitesNonce = "<?php echo esc_js(wp_create_nonce('scrivania_dashboard_invites')); ?>";
+    var rubricaContattiNonce = "<?php echo esc_js(wp_create_nonce('rubrica_contatti')); ?>";
 </script>
 
 <script>
@@ -326,6 +385,10 @@ get_header(); ?>
 
         if (id === 'gestione-inviti' && typeof window.scrivaniaDashboardLoadInvites === 'function') {
             window.scrivaniaDashboardLoadInvites();
+        }
+
+        if (id === 'rubrica-contatti' && typeof window.dashboardCaricaRubrica === 'function') {
+            window.dashboardCaricaRubrica();
         }
     }
     jQuery(document).ready(function($) {
@@ -360,8 +423,93 @@ get_header(); ?>
                 action: 'carica_contatti_utente'
             }, function(data) {
                 $('#rubricaContatti').html(data);
+            }).fail(function() {
+                $('#rubricaContatti').html('<div style="color:red;">Errore nel caricamento contatti. Riprova.</div>');
             });
         }
+
+        // Espone la funzione per usarla da toggleTab()
+        window.dashboardCaricaRubrica = caricaRubrica;
+
+        function getRubricaFeedbackStatus(html) {
+            return $('<div>').html(String(html ?? '')).find('.rubrica-feedback').first().data('status') || '';
+        }
+
+        $('#aggiungiContattoForm').on('submit', function(e) {
+            e.preventDefault();
+
+            const $form = $(this);
+            const $submit = $form.find('button[type="submit"]');
+            const nome = $.trim($('#contatto_nome').val());
+            const email = $.trim($('#contatto_email').val());
+
+            if (!nome || !email) {
+                $('#rubrica_msg').html('<div class="rubrica-feedback" data-status="error" style="color:red;">Compila nome ed email.</div>');
+                return;
+            }
+
+            $submit.prop('disabled', true);
+            $('#rubrica_msg').html('<div class="rubrica-feedback" data-status="info" style="color:#444;">Salvataggio in corso...</div>');
+
+            $.post(ajaxurl, {
+                action: 'aggiungi_contatto_utente',
+                nonce: rubricaContattiNonce,
+                nome: nome,
+                email: email
+            }, function(response) {
+                const feedbackHtml = String(response ?? '');
+
+                $('#rubrica_msg').html(feedbackHtml);
+
+                if (getRubricaFeedbackStatus(feedbackHtml) === 'success') {
+                    if ($form.length && $form[0]) {
+                        $form[0].reset();
+                    }
+                    caricaRubrica();
+                }
+            }).fail(function() {
+                $('#rubrica_msg').html('<div class="rubrica-feedback" data-status="error" style="color:red;">Errore di rete durante il salvataggio. Riprova.</div>');
+            }).always(function() {
+                $submit.prop('disabled', false);
+            });
+        });
+
+        $('#rubricaContatti').on('click', '.rubrica-delete-btn', function() {
+            const $button = $(this);
+            const email = String($button.data('contact-email') || '');
+            const name = String($button.data('contact-name') || '').trim();
+            const label = name ? (name + ' <' + email + '>') : email;
+
+            if (!email) {
+                $('#rubrica_msg').html('<div class="rubrica-feedback" data-status="error" style="color:red;">Contatto non valido.</div>');
+                return;
+            }
+
+            if (!window.confirm('Vuoi eliminare questo contatto dalla rubrica?\n' + label)) {
+                return;
+            }
+
+            $button.prop('disabled', true);
+            $('#rubrica_msg').html('<div class="rubrica-feedback" data-status="info" style="color:#444;">Eliminazione in corso...</div>');
+
+            $.post(ajaxurl, {
+                action: 'elimina_contatto_utente',
+                nonce: rubricaContattiNonce,
+                email: email
+            }, function(response) {
+                const feedbackHtml = String(response ?? '');
+
+                $('#rubrica_msg').html(feedbackHtml);
+
+                if (getRubricaFeedbackStatus(feedbackHtml) === 'success') {
+                    caricaRubrica();
+                }
+            }).fail(function() {
+                $('#rubrica_msg').html('<div class="rubrica-feedback" data-status="error" style="color:red;">Errore di rete durante l\'eliminazione. Riprova.</div>');
+            }).always(function() {
+                $button.prop('disabled', false);
+            });
+        });
 
         function caricaContattiPerModale() {
             $.post(ajaxurl, {

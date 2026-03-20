@@ -118,14 +118,64 @@ class Scrivania_Ajax {
         return !empty($status) ? $status : 'pending';
     }
 
+    private static function get_wp_timezone() {
+        if (function_exists('wp_timezone')) {
+            return wp_timezone();
+        }
+
+        $timezone_string = function_exists('wp_timezone_string') ? wp_timezone_string() : '';
+        if (empty($timezone_string)) {
+            $timezone_string = 'UTC';
+        }
+
+        try {
+            return new DateTimeZone($timezone_string);
+        } catch (Exception $e) {
+            return new DateTimeZone('UTC');
+        }
+    }
+
+    private static function parse_invite_schedule($data, $ora) {
+        $date = trim((string) $data);
+        $time = trim((string) $ora);
+
+        if ($date === '' || $time === '') {
+            return null;
+        }
+
+        $timezone = self::get_wp_timezone();
+        $formats = array('Y-m-d H:i:s', 'Y-m-d H:i');
+
+        foreach ($formats as $format) {
+            $dt = DateTimeImmutable::createFromFormat('!' . $format, $date . ' ' . $time, $timezone);
+            $errors = DateTimeImmutable::getLastErrors();
+            $has_errors = is_array($errors) && (!empty($errors['warning_count']) || !empty($errors['error_count']));
+            if ($dt instanceof DateTimeImmutable && !$has_errors) {
+                return $dt;
+            }
+        }
+
+        return null;
+    }
+
+    private static function format_invite_schedule_html($data, $ora) {
+        $scheduled_at = self::parse_invite_schedule($data, $ora);
+        if (!$scheduled_at) {
+            return '';
+        }
+
+        $date_label = function_exists('wp_date')
+            ? wp_date('d/m/Y', $scheduled_at->getTimestamp(), self::get_wp_timezone())
+            : date_i18n('d/m/Y', $scheduled_at->getTimestamp());
+
+        return '<p><strong>Quando:</strong> ' . esc_html($date_label) . ' alle ' . esc_html($scheduled_at->format('H:i')) . '</p>';
+    }
+
     private static function send_scrivania_invite_email($email, $token, $data, $ora) {
         $link = home_url('/invito-scrivania/?token=' . $token);
         $subject = 'Invito al Tool Scrivania';
 
-        $when = '';
-        if (!empty($data) && !empty($ora)) {
-            $when = '<p><strong>Quando:</strong> ' . date_i18n('d/m/Y', strtotime((string) $data)) . ' alle ' . esc_html((string) $ora) . '</p>';
-        }
+        $when = self::format_invite_schedule_html($data, $ora);
 
         $body =
             '<p>Hai ricevuto un invito al Tool Scrivania!</p>' .
@@ -633,6 +683,15 @@ class Scrivania_Ajax {
             echo '<div style="color:red;">Dati mancanti o non validi.</div>';
             wp_die();
         }
+
+        $scheduled_at = self::parse_invite_schedule($data, $ora);
+        if (!$scheduled_at) {
+            echo '<div style="color:red;">Data o orario non validi.</div>';
+            wp_die();
+        }
+
+        $data = $scheduled_at->format('Y-m-d');
+        $ora = $scheduled_at->format('H:i');
 
         $emails = array_filter(array_map('sanitize_email', $emails));
         if (empty($emails)) {
