@@ -18,7 +18,14 @@ get_header();
 
 // Controlla se l'utente è loggato
 if (!is_user_logged_in()) {
-    echo '<div class="site-main-fw"><div class="container"><h2>Devi effettuare l\'accesso per utilizzare questo strumento</h2></div></div>';
+    $current_url = add_query_arg(null, null);
+    echo '<div class="site-main-fw"><div class="container" style="max-width:700px; margin:0 auto; padding:2rem;">';
+    echo '<h2>Devi effettuare l\'accesso per utilizzare questo strumento</h2>';
+    echo '<p>Accedi con l\'account corretto per continuare e riaprire questa sessione.</p>';
+    wp_login_form(array(
+        'redirect' => esc_url($current_url),
+    ));
+    echo '</div></div>';
     get_footer();
     exit;
 }

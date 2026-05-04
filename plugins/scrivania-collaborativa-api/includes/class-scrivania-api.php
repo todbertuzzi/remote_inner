@@ -500,21 +500,10 @@ class Scrivania_Collaborativa_API
         $params = $request->get_json_params();
         $session_id = intval($params['session_id'] ?? 0);
         $sessione = $params['sessione'] ?? array();
-        $carte = $params['carte'] ?? array();
-
-        // V1: supporto snapshot unico
-        if (isset($params['snapshot']) && is_array($params['snapshot'])) {
-            $snapshot = $params['snapshot'];
-            if (isset($snapshot['carte'])) {
-                $carte = $snapshot['carte'];
-            }
-            if (isset($snapshot['planciaZoom'])) {
-                $sessione['planciaZoom'] = $snapshot['planciaZoom'];
-            }
-            if (isset($snapshot['planciaPosition'])) {
-                $sessione['planciaPosition'] = $snapshot['planciaPosition'];
-            }
+        if (!is_array($sessione)) {
+            $sessione = array();
         }
+        $carte = $params['carte'] ?? array();
 
         if (!$session_id) {
             return new WP_Error('session_id_missing', 'ID sessione mancante', array('status' => 400));
@@ -531,6 +520,27 @@ class Scrivania_Collaborativa_API
 
         if (!$session) {
             return new WP_Error('session_not_found', 'Sessione non trovata!!', array('status' => 404));
+        }
+
+        $stored_sessione = json_decode($session->impostazioni ?? '{}', true);
+        if (!is_array($stored_sessione)) {
+            $stored_sessione = array();
+        }
+
+        $sessione = array_merge($stored_sessione, $sessione);
+
+        // V1: supporto snapshot unico. Aggiorna solo i campi di plancia preservando le altre impostazioni.
+        if (isset($params['snapshot']) && is_array($params['snapshot'])) {
+            $snapshot = $params['snapshot'];
+            if (isset($snapshot['carte'])) {
+                $carte = $snapshot['carte'];
+            }
+            if (isset($snapshot['planciaZoom'])) {
+                $sessione['planciaZoom'] = $snapshot['planciaZoom'];
+            }
+            if (isset($snapshot['planciaPosition'])) {
+                $sessione['planciaPosition'] = $snapshot['planciaPosition'];
+            }
         }
 
         // Verifica che l'utente corrente sia l'amministratore
@@ -822,6 +832,15 @@ class Scrivania_Collaborativa_API
     {
         $params = $request->get_params();
         $nome = sanitize_text_field($params['nome'] ?? 'Nuova Sessione');
+        $raw_deck_id = $params['mazzo_id'] ?? ($params['mazzoId'] ?? 0);
+        if (function_exists('gim_normalize_scrivania_deck_id')) {
+            $deck_id = gim_normalize_scrivania_deck_id($raw_deck_id);
+        } else {
+            $deck_id = intval($raw_deck_id);
+            if (!in_array($deck_id, array(0, 1), true)) {
+                $deck_id = 0;
+            }
+        }
 
         $user_id = get_current_user_id();
 
@@ -832,7 +851,7 @@ class Scrivania_Collaborativa_API
         $impostazioni = array(
             'attiva' => false,
             'iniziata' => null,
-            'mazzoId' => 0,
+            'mazzoId' => $deck_id,
             'sfondo' => null
         );
 

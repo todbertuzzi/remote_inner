@@ -233,6 +233,15 @@ get_header(); ?>
     </div>
 </main>
 
+<?php
+$scrivania_deck_options = function_exists('gim_get_scrivania_deck_options')
+    ? gim_get_scrivania_deck_options()
+    : array(
+        array('id' => 0, 'label' => 'Mazzo 0 (verticale)'),
+        array('id' => 1, 'label' => 'Mazzo 1 (orizzontale 4/3)'),
+    );
+?>
+
 <!-- Modale per invito ai Giochi  -->
 <div id="inviteModal" style="display:none; position:fixed; top:10%; left:50%; transform:translateX(-50%); background:#fff; padding:20px; box-shadow:0 0 10px rgba(0,0,0,0.2); z-index:1000; max-width:400px; width:100%;">
     <h3 id="modalGiocoTitle"></h3>
@@ -252,10 +261,16 @@ get_header(); ?>
     <div id="scrivaniaContattiList">
         <p>Caricamento contatti...</p>
     </div>
-    <label for="data_scrivania">Data:</label>
-    <input type="date" id="data_scrivania">
-    <label for="ora_scrivania">Orario:</label>
-    <input type="time" id="ora_scrivania">
+    <label for="scrivania_mazzo" style="display:block; margin-top:12px;">Mazzo:</label>
+    <select id="scrivania_mazzo" style="display:block; width:100%; margin-bottom:10px;">
+        <?php foreach ($scrivania_deck_options as $deck_option) : ?>
+            <option value="<?php echo esc_attr($deck_option['id']); ?>"><?php echo esc_html($deck_option['label']); ?></option>
+        <?php endforeach; ?>
+    </select>
+    <label for="data_scrivania" style="display:block;">Data:</label>
+    <input type="date" id="data_scrivania" style="display:block; width:100%; margin-bottom:10px;">
+    <label for="ora_scrivania" style="display:block;">Orario:</label>
+    <input type="time" id="ora_scrivania" style="display:block; width:100%; margin-bottom:10px;">
     <button id="sendScrivaniaInvites">Invia inviti</button>
     <button id="closeScrivaniaModal">Chiudi</button>
     <div id="scrivaniaInviteResponse"></div>
@@ -414,6 +429,7 @@ get_header(); ?>
                 modal: true
             }, function(data) {
                 $('#scrivaniaContattiList').html(data);
+                $('#scrivaniaInviteResponse').html('');
                 $('#scrivaniaInviteModal, #modalBackdrop').show();
             });
         }
@@ -534,6 +550,7 @@ get_header(); ?>
             });
             let data = $('#data_scrivania').val();
             let ora = $('#ora_scrivania').val();
+            let mazzoId = $('#scrivania_mazzo').val();
             if (emails.length === 0 || !data || !ora) {
                 $('#scrivaniaInviteResponse').html('<div style="color:red;">Seleziona almeno un contatto e inserisci data e orario.</div>');
                 return;
@@ -542,7 +559,8 @@ get_header(); ?>
                 action: 'attiva_scrivania',
                 email_destinatario: emails.join(','),
                 data_invito: data,
-                ora_invito: ora
+                ora_invito: ora,
+                mazzo_id: mazzoId
             }, function(response) {
                 $('#scrivaniaInviteResponse').html(response);
 

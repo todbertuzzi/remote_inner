@@ -171,6 +171,33 @@ class Scrivania_Ajax {
         return '<p><strong>Quando:</strong> ' . esc_html($date_label) . ' alle ' . esc_html($scheduled_at->format('H:i')) . '</p>';
     }
 
+    private static function get_scrivania_deck_options() {
+        if (function_exists('gim_get_scrivania_deck_options')) {
+            $options = gim_get_scrivania_deck_options();
+            if (is_array($options) && !empty($options)) {
+                return $options;
+            }
+        }
+
+        return array(
+            array('id' => 0, 'label' => 'Mazzo 0 (verticale)'),
+            array('id' => 1, 'label' => 'Mazzo 1 (orizzontale 4/3)'),
+        );
+    }
+
+    private static function normalize_deck_id($value) {
+        $deck_id = intval($value);
+        $valid_ids = array();
+
+        foreach (self::get_scrivania_deck_options() as $option) {
+            if (isset($option['id'])) {
+                $valid_ids[] = intval($option['id']);
+            }
+        }
+
+        return in_array($deck_id, $valid_ids, true) ? $deck_id : 0;
+    }
+
     private static function send_scrivania_invite_email($email, $token, $data, $ora) {
         $link = home_url('/invito-scrivania/?token=' . $token);
         $subject = 'Invito al Tool Scrivania';
@@ -678,6 +705,7 @@ class Scrivania_Ajax {
         }
         $data = isset($_POST['data_invito']) ? sanitize_text_field($_POST['data_invito']) : '';
         $ora = isset($_POST['ora_invito']) ? sanitize_text_field($_POST['ora_invito']) : '';
+        $deck_id = self::normalize_deck_id($_POST['mazzo_id'] ?? 0);
 
         if (empty($emails) || empty($data) || empty($ora)) {
             echo '<div style="color:red;">Dati mancanti o non validi.</div>';
@@ -718,7 +746,7 @@ class Scrivania_Ajax {
             if (!empty($existing_session_id)) {
                 $session_id = (int) $existing_session_id;
                 // Welcome: reset sessione e revoca tutti gli inviti precedenti.
-                self::reset_session_state($session_id);
+                self::reset_session_state($session_id, $deck_id);
                 self::revoke_invites_for_session($session_id);
             } else {
                 // Welcome: può creare la prima e unica sessione.
@@ -733,11 +761,11 @@ class Scrivania_Ajax {
                     wp_die();
                 }
 
-                $session_id = (int) self::create_new_session($user_id);
+                $session_id = (int) self::create_new_session($user_id, $deck_id);
             }
         } else {
             // Non-Welcome: nuova sessione sempre
-            $session_id = (int) self::create_new_session($user_id);
+            $session_id = (int) self::create_new_session($user_id, $deck_id);
             if (!empty($session_id)) {
                 self::archive_previous_sessions_for_creator($user_id, $session_id);
             }
@@ -909,9 +937,11 @@ class Scrivania_Ajax {
     /**
      * Crea SEMPRE una nuova sessione per l'utente (no riuso).
      */
-    private static function create_new_session($user_id) {
+    private static function create_new_session($user_id, $deck_id = 0) {
         global $wpdb;
         $table = $wpdb->prefix . 'scrivania_sessioni';
+
+        $deck_id = self::normalize_deck_id($deck_id);
 
         $token = wp_generate_password(24, false);
         $ud = get_userdata($user_id);
@@ -921,7 +951,7 @@ class Scrivania_Ajax {
         $impostazioni = [
             'attiva' => false,
             'iniziata' => null,
-            'mazzoId' => 0,
+            'mazzoId' => $deck_id,
             'sfondo' => null
         ];
 
@@ -945,14 +975,16 @@ class Scrivania_Ajax {
     /**
      * Reset dello stato sessione (plancia/carte) mantenendo lo stesso session_id.
      */
-    private static function reset_session_state($session_id) {
+    private static function reset_session_state($session_id, $deck_id = 0) {
         global $wpdb;
         $table = $wpdb->prefix . 'scrivania_sessioni';
+
+        $deck_id = self::normalize_deck_id($deck_id);
 
         $impostazioni = [
             'attiva' => false,
             'iniziata' => null,
-            'mazzoId' => 0,
+            'mazzoId' => $deck_id,
             'sfondo' => null
         ];
 

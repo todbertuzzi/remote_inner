@@ -210,6 +210,72 @@ function gim_format_scrivania_schedule_html($data, $ora) {
     return '<p><strong>Quando:</strong> ' . esc_html($date_label) . ' alle ' . esc_html($scheduled_at->format('H:i')) . '</p>';
 }
 
+if (!function_exists('gim_get_scrivania_deck_options')) {
+    function gim_get_scrivania_deck_options() {
+        return array(
+            array('id' => 0, 'label' => 'Mazzo 0 (verticale)'),
+            array('id' => 1, 'label' => 'Mazzo 1 (orizzontale 4/3)'),
+        );
+    }
+}
+
+if (!function_exists('gim_normalize_scrivania_deck_id')) {
+    function gim_normalize_scrivania_deck_id($value) {
+        $deck_id = intval($value);
+        $valid_ids = array();
+
+        foreach (gim_get_scrivania_deck_options() as $option) {
+            if (isset($option['id'])) {
+                $valid_ids[] = intval($option['id']);
+            }
+        }
+
+        return in_array($deck_id, $valid_ids, true) ? $deck_id : 0;
+    }
+}
+
+if (!function_exists('gim_apply_scrivania_deck_to_session')) {
+    function gim_apply_scrivania_deck_to_session($session_id, $deck_id) {
+        global $wpdb;
+
+        $session_id = intval($session_id);
+        if ($session_id <= 0) {
+            return false;
+        }
+
+        $table = $wpdb->prefix . 'scrivania_sessioni';
+        $settings_json = $wpdb->get_var($wpdb->prepare(
+            "SELECT impostazioni FROM {$table} WHERE id = %d",
+            $session_id
+        ));
+
+        if ($settings_json === null) {
+            return false;
+        }
+
+        $settings = array();
+        if (!empty($settings_json)) {
+            $decoded = json_decode($settings_json, true);
+            if (is_array($decoded)) {
+                $settings = $decoded;
+            }
+        }
+
+        $settings['mazzoId'] = gim_normalize_scrivania_deck_id($deck_id);
+
+        return $wpdb->update(
+            $table,
+            array(
+                'impostazioni' => wp_json_encode($settings),
+                'modificato_il' => current_time('mysql'),
+            ),
+            array('id' => $session_id),
+            array('%s', '%s'),
+            array('%d')
+        ) !== false;
+    }
+}
+
 
 
 /**
@@ -231,9 +297,11 @@ if (!function_exists('gim_create_or_get_session')) {
      * Fallback: crea o recupera una sessione scrivania per l'utente.
      * Nota: se il plugin Scrivania Collaborativa API è attivo, questo handler viene disabilitato.
      */
-    function gim_create_or_get_session($user_id)
+    function gim_create_or_get_session($user_id, $deck_id = 0)
     {
         global $wpdb;
+
+        $deck_id = gim_normalize_scrivania_deck_id($deck_id);
 
         $table = $wpdb->prefix . 'scrivania_sessioni';
 
@@ -248,6 +316,7 @@ if (!function_exists('gim_create_or_get_session')) {
             $user_id
         ));
         if (!empty($session_id)) {
+            gim_apply_scrivania_deck_to_session($session_id, $deck_id);
             return (int) $session_id;
         }
 
@@ -259,7 +328,7 @@ if (!function_exists('gim_create_or_get_session')) {
         $impostazioni = [
             'attiva' => false,
             'iniziata' => null,
-            'mazzoId' => 0,
+            'mazzoId' => $deck_id,
             'sfondo' => null,
         ];
 
@@ -294,6 +363,7 @@ function gim_attiva_scrivania() {
     }
     $data = sanitize_text_field($_POST['data_invito'] ?? '');
     $ora = sanitize_text_field($_POST['ora_invito'] ?? '');
+    $deck_id = gim_normalize_scrivania_deck_id($_POST['mazzo_id'] ?? 0);
 
     if (!is_array($emails) || !$data || !$ora) {
         echo '<div style="color:red;">Dati mancanti o non validi.</div>';
@@ -335,7 +405,7 @@ function gim_attiva_scrivania() {
     }
 
     // Crea o recupera una sessione
-    $session_id = gim_create_or_get_session($user_id);
+    $session_id = gim_create_or_get_session($user_id, $deck_id);
     if (!$session_id) {
         echo '<div style="color:red;">Errore nella creazione della sessione.</div>';
         wp_die();
