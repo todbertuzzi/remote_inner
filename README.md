@@ -57,3 +57,34 @@ Il tool visualizzerà una scrivania, una barra laterale in cui vengono mostrati 
 Sarà possibile per il gestore dare inizio e fine alla sessione in qualsiasi momento. Una volta che la sessione è iniziata il gestore potrà inserire sulla scrivania delle carte scegliendole dal mazzo visualizzato nel riquadro in basso. Una volta posizionate le carte sulla scrivania il gestore potrà spostarle, ingrandire e ruotare. Ogni inserimento di carta o suo spostamento sulla scrivania verrà visualizzato da tutti gli utenti connessi alla pagina. In qualsiasi momento il gestore potrà scegliere di dare o levare il controllo della scrivania ad uno tra gli utenti che stanno partecipando alla sessione, a partire da quel momento lo spostamento, ingrandimento , rotazione delle carte sarà possibile anche all’utente selezionato.
 
 I giochi verranno interfacciati al sito tramite api , si prevedono 3 funzionalità: integrazione dell’autenticazione, salvataggio punteggio, recupero classifiche; le api verranno dettagliate in un documento di specifiche apposito.
+
+
+Gestione cumulativa accessi a corsi e giochi
+
+La regola di accesso applicativa è centralizzata nel plugin `Innerplay - Controllo Accessi` (`plugins/innerplay-access-control`).
+
+La corrispondenza corrente con Paid Memberships Pro è:
+
+- Welcome: livello ID 3
+- Professional: livello ID 4
+- Gold: livello ID 5
+
+Gli accessi sono cumulativi:
+
+- Welcome può accedere ai contenuti Welcome;
+- Professional può accedere ai contenuti Welcome e Professional;
+- Gold può accedere ai contenuti Welcome, Professional e Gold;
+- gli amministratori possono accedere a tutti i contenuti;
+- utenti senza abbonamento attivo o con un livello non riconosciuto non possono accedere.
+
+Il livello minimo di un corso è determinato dalla tassonomia Tutor LMS `course-category`; quello di un gioco dalla tassonomia `categoria_giochi`. Gli slug riconosciuti sono `welcome`, `professional` e `gold`.
+
+Un contenuto senza uno di questi livelli, oppure con più livelli di accesso contemporaneamente, è considerato in lavorazione: non appare nella dashboard e può essere aperto soltanto dagli amministratori.
+
+Per i giochi, il livello PMPro stabilisce quali giochi l'abbonato può vedere e per quali può creare un invito. Il destinatario non deve avere un abbonamento, ma può aprire soltanto la sessione associata alla propria email/utenza e al relativo UUID, se non revocata o scaduta.
+
+I corsi sono protetti sia sull'URL frontend sia negli endpoint REST del singolo corso. La collezione REST mostra soltanto i corsi consentiti all'utente corrente.
+
+L'archivio pubblico `/Corsi` resta consultabile integralmente dai visitatori anonimi come catalogo. Per gli utenti autenticati, l'archivio e le altre liste frontend vengono filtrati con la matrice cumulativa del piano attivo; utenti autenticati senza un piano riconosciuto non vedono corsi disponibili.
+
+Quando un utente autenticato prova ad aprire un contenuto non consentito, viene reindirizzato alla pagina Elementor pubblicata con slug `/accesso-riservato/`. La pagina viene servita con status HTTP 403, intestazione `noindex` e cache disabilitata. Se la pagina manca o non è pubblicata, il plugin mostra un messaggio di emergenza tramite WordPress.

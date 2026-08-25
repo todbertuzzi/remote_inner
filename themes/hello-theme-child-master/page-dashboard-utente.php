@@ -34,7 +34,11 @@ if (!function_exists('pmpro_getMembershipLevelForUser')) {
 }
 
 $membership_level = pmpro_getMembershipLevelForUser($current_user->ID);
-if (empty($membership_level) && !current_user_can('manage_options')) {
+$user_access_tier = function_exists('ipt_get_user_access_tier')
+    ? ipt_get_user_access_tier($current_user->ID)
+    : '';
+
+if ((empty($membership_level) || $user_access_tier === '') && !current_user_can('manage_options')) {
     status_header(403);
 
     $levels_url = function_exists('pmpro_url') ? pmpro_url('levels') : home_url('/');
@@ -53,41 +57,38 @@ if (empty($membership_level) && !current_user_can('manage_options')) {
     exit;
 }
 
-$categoria_slug = '';
-$limite_giochi = -1;
-
-if ($membership_level) {
-    switch (strtolower($membership_level->name)) {
-        case 'welcome':
-            $categoria_slug = 'welcome';
-            $limite_giochi = 1;
-            break;
-        case 'professional':
-            $categoria_slug = 'professional';
-            break;
-        case 'gold':
-            $categoria_slug = 'gold';
-            break;
-    }
-}
+$allowed_content_tiers = function_exists('ipt_get_allowed_access_tiers')
+    ? ipt_get_allowed_access_tiers($current_user->ID)
+    : array();
+$limite_giochi = $user_access_tier === 'welcome' ? 1 : -1;
 
 $giochi = [];
-$giochi_query = new WP_Query([
+$giochi_query_args = [
     'post_type' => 'gioco',
     'posts_per_page' => $limite_giochi,
     'orderby' => 'date',
     'order' => 'DESC',
-    'tax_query' => [
+];
+if (!empty($allowed_content_tiers)) {
+    $giochi_query_args['tax_query'] = [
         [
             'taxonomy' => 'categoria_giochi',
             'field' => 'slug',
-            'terms' => $categoria_slug
+            'terms' => $allowed_content_tiers,
+            'operator' => 'IN',
         ]
-    ]
-]);
+    ];
+} else {
+    $giochi_query_args['post__in'] = [0];
+}
+$giochi_query = new WP_Query($giochi_query_args);
 if ($giochi_query->have_posts()) {
     while ($giochi_query->have_posts()) {
         $giochi_query->the_post();
+        if (!function_exists('ipt_user_can_access_content') || !ipt_user_can_access_content($current_user->ID, get_the_ID())) {
+            continue;
+        }
+
         $game_title = trim((string) get_field('titolo_gioco', get_the_ID()));
         if ($game_title === '') {
             $game_title = get_the_title();
@@ -96,27 +97,36 @@ if ($giochi_query->have_posts()) {
         $giochi[] = [
             'id' => get_the_ID(),
             'title' => $game_title,
-            'permalink' => get_permalink(),
         ];
     }
     wp_reset_postdata();
 }
 
 $corsi = [];
-$corsi_query = new WP_Query([
+$corsi_query_args = [
     'post_type' => 'courses',
     'posts_per_page' => -1,
-    'tax_query' => [
+];
+if (!empty($allowed_content_tiers)) {
+    $corsi_query_args['tax_query'] = [
         [
             'taxonomy' => 'course-category',
             'field' => 'slug',
-            'terms' => 'professional'
+            'terms' => $allowed_content_tiers,
+            'operator' => 'IN',
         ]
-    ]
-]);
+    ];
+} else {
+    $corsi_query_args['post__in'] = [0];
+}
+$corsi_query = new WP_Query($corsi_query_args);
 if ($corsi_query->have_posts()) {
     while ($corsi_query->have_posts()) {
         $corsi_query->the_post();
+        if (!function_exists('ipt_user_can_access_content') || !ipt_user_can_access_content($current_user->ID, get_the_ID())) {
+            continue;
+        }
+
         $corsi[] = [
             'id' => get_the_ID(),
             'titolo' => get_the_title(),
@@ -160,10 +170,6 @@ get_header(); ?>
                             </div>
 
                             <div class="dashboard-content-actions">
-                                <a href="<?php echo esc_url($gioco['permalink']); ?>" class="dashboard-content-link">
-                                    Vai al gioco
-                                </a>
-
                                 <button
                                     type="button"
                                     class="dashboard-content-invite open-invite-modal"
@@ -207,7 +213,7 @@ get_header(); ?>
             <a href="/tool-scrivania">Vai alla Scrivania</a>
             <button id="openScrivaniaModal">Invita al Tool</button>
 
-            <?php if (pmpro_hasMembershipLevel("Gold")): ?>
+            <?php if (in_array($user_access_tier, array('gold', 'admin'), true)): ?>
                 <h3>🎁 Contenuti Extra (solo Gold)</h3>
                 <p>Accesso a contenuti esclusivi in arrivo...</p>
             <?php endif; ?>
@@ -321,6 +327,7 @@ $scrivania_deck_options = function_exists('gim_get_scrivania_deck_options')
     var ajaxurl = "<?php echo admin_url('admin-ajax.php'); ?>";
     var scrivaniaDashboardInvitesNonce = "<?php echo esc_js(wp_create_nonce('scrivania_dashboard_invites')); ?>";
     var rubricaContattiNonce = "<?php echo esc_js(wp_create_nonce('rubrica_contatti')); ?>";
+    var gameInviteNonce = "<?php echo esc_js(wp_create_nonce('ipt_game_invite')); ?>";
 </script>
 
 <script>
@@ -762,9 +769,15 @@ $scrivania_deck_options = function_exists('gim_get_scrivania_deck_options')
             }
             $.post(ajaxurl, {
                 action: 'attiva_gioco',
+                nonce: gameInviteNonce,
                 gioco_id: giocoId,
                 email_destinatario: invitedEmail
             }, function(response) {
+                $('#inviteResponse').html(response);
+            }).fail(function(xhr) {
+                const response = xhr && xhr.responseText
+                    ? xhr.responseText
+                    : '<div class="dashboard-feedback dashboard-feedback--error">Impossibile creare l\'invito.</div>';
                 $('#inviteResponse').html(response);
             });
         });

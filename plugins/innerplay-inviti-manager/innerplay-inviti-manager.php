@@ -601,13 +601,23 @@ add_action('plugins_loaded', function () {
  */
 add_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
 
+function gim_game_invite_fail($message, $status = 400)
+{
+    status_header(intval($status));
+    echo '<div class="dashboard-feedback dashboard-feedback--error">' . esc_html($message) . '</div>';
+    wp_die();
+}
+
 function gim_attiva_gioco()
 {
     gim_install_game_sessions_schema();
 
     if (!is_user_logged_in()) {
-        echo '<div style="color:red;">Devi essere loggato.</div>';
-        wp_die();
+        gim_game_invite_fail('Devi essere loggato.', 401);
+    }
+
+    if (!check_ajax_referer('ipt_game_invite', 'nonce', false)) {
+        gim_game_invite_fail('Richiesta non valida o scaduta. Ricarica la pagina e riprova.', 403);
     }
 
     $gioco_id = isset($_POST['gioco_id']) ? intval($_POST['gioco_id']) : 0;
@@ -619,26 +629,26 @@ function gim_attiva_gioco()
     }
 
     if ($gioco_id <= 0 || empty($emails)) {
-        echo '<div style="color:red;">Dati mancanti: seleziona un gioco e almeno un contatto.</div>';
-        wp_die();
+        gim_game_invite_fail('Dati mancanti: seleziona un gioco e almeno un contatto.');
     }
 
     // Verifica post "gioco"
     $gioco = get_post($gioco_id);
     if (!$gioco || $gioco->post_type !== 'gioco' || $gioco->post_status !== 'publish') {
-        echo '<div style="color:red;">Gioco non valido.</div>';
-        wp_die();
+        gim_game_invite_fail('Gioco non valido.', 404);
+    }
+
+    if (!function_exists('ipt_user_can_invite_game') || !ipt_user_can_invite_game(get_current_user_id(), $gioco_id)) {
+        gim_game_invite_fail('Il tuo piano non consente di invitare utenti a questo gioco.', 403);
     }
 
     // Sanifica e limita a 1: ogni sessione gioco ora ha un solo invitato.
     $emails = array_values(array_unique(array_filter(array_map('sanitize_email', $emails))));
     if (empty($emails)) {
-        echo '<div style="color:red;">Nessuna email valida.</div>';
-        wp_die();
+        gim_game_invite_fail('Nessuna email valida.');
     }
     if (count($emails) !== 1) {
-        echo '<div style="color:red;">Seleziona un solo contatto.</div>';
-        wp_die();
+        gim_game_invite_fail('Seleziona un solo contatto.');
     }
 
     $invited_email = $emails[0];
@@ -669,8 +679,7 @@ function gim_attiva_gioco()
     ], ['%d','%d','%s','%s','%d','%s','%s','%s']);
 
     if ($ins === false) {
-        echo '<div style="color:red;">Errore creazione sessione.</div>';
-        wp_die();
+        gim_game_invite_fail('Errore nella creazione della sessione.', 500);
     }
 
     $session_id = (int) $wpdb->insert_id;
@@ -692,7 +701,7 @@ function gim_attiva_gioco()
         );
     }
 
-    echo '<div style="color:green;">Partita creata per: ' . esc_html($invited_email) . '</div>';
+    echo '<div class="dashboard-feedback dashboard-feedback--success">Partita creata per: ' . esc_html($invited_email) . '</div>';
     echo '<div>Link sessione: <a href="' . esc_url($link) . '" target="_blank">' . esc_html($link) . '</a></div>';
     wp_die();
 }

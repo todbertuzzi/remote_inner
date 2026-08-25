@@ -69,12 +69,19 @@ function game_get_user_profile(WP_REST_Request $request)
     if (!$session) {
         return new WP_REST_Response(['status' => 'error', 'message' => 'session_not_found'], 404);
     }
-    if (!empty($session->expires_at) && current_time('timestamp') > strtotime($session->expires_at)) {
-        return new WP_REST_Response(['status' => 'error', 'message' => 'expired'], 410);
-    }
     $current_user = wp_get_current_user();
-    if (!game__user_can_access_session($session, $current_user)) {
-        return new WP_REST_Response(['status' => 'error', 'message' => 'forbidden'], 403);
+    $access_result = function_exists('ipt_validate_game_session_access')
+        ? ipt_validate_game_session_access($session, $current_user)
+        : new WP_Error('access_control_unavailable', 'Controllo accessi non disponibile.', array('status' => 503));
+
+    if (is_wp_error($access_result)) {
+        $status = function_exists('ipt_access_error_status')
+            ? ipt_access_error_status($access_result)
+            : 403;
+        return new WP_REST_Response([
+            'status' => 'error',
+            'message' => $access_result->get_error_code(),
+        ], $status);
     }
 
     game__bind_invited_user($session, $current_user);

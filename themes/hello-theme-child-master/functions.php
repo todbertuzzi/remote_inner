@@ -149,13 +149,19 @@ function ipt_login_redirect_dashboard($redirect_to, $request, $user) {
                 strpos($path, '/tool-scrivania') !== false ||
                 strpos($path, '/gioca') !== false
             ));
+            $is_course_flow = (!empty($path) && (
+                stripos($path, '/Corsi/') !== false ||
+                stripos($path, '/lesson/') !== false ||
+                stripos($path, '/tutor-quiz/') !== false ||
+                stripos($path, '/assignments/') !== false
+            ));
             $has_invite_query = (!empty($query) && (
                 strpos($query, 'token=') !== false ||
                 strpos($query, 'invito=') !== false ||
                 strpos($query, 'invito_uuid=') !== false
             ));
 
-            if ($is_invite_flow || $has_invite_query) {
+            if ($is_invite_flow || $is_course_flow || $has_invite_query) {
                 return $validated_redirect;
             }
         }

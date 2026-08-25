@@ -1,5 +1,4 @@
 <?php
-get_header();
 
 // Gating: login obbligatorio
 if (!is_user_logged_in()) {
@@ -10,6 +9,7 @@ if (!is_user_logged_in()) {
 $invito_uuid = isset($_GET['invito_uuid']) ? sanitize_text_field($_GET['invito_uuid']) : '';
 if (!$invito_uuid) {
   status_header(403);
+  get_header();
   echo '<main class="site-main"><div class="container"><h2>Accesso non autorizzato (invito mancante)</h2></div></main>';
   get_footer();
   exit;
@@ -23,33 +23,30 @@ $session = $wpdb->get_row($wpdb->prepare(
 ));
 if (!$session) {
   status_header(404);
+  get_header();
   echo '<main class="site-main"><div class="container"><h2>Sessione non trovata</h2></div></main>';
   get_footer();
   exit;
 }
-if (!empty($session->expires_at) && current_time('timestamp') > strtotime($session->expires_at)) {
-  status_header(410);
-  echo '<main class="site-main"><div class="container"><h2>Sessione scaduta</h2></div></main>';
-  get_footer();
-  exit;
-}
-
-// Se la sessione appartiene a un altro gioco, redirigi al gioco corretto
-if (intval($session->gioco_id) !== get_the_ID()) {
-  wp_redirect(add_query_arg(['invito_uuid' => $invito_uuid], get_permalink(intval($session->gioco_id))));
-  exit;
-}
-
-// Verifica permessi: accesso consentito solo all'utente invitato per questa sessione
 $current_user = wp_get_current_user();
-$can_access = function_exists('gim_game_user_can_access_session')
-  ? gim_game_user_can_access_session($session, $current_user)
-  : false;
+$access_result = function_exists('ipt_validate_game_session_access')
+  ? ipt_validate_game_session_access($session, $current_user)
+  : new WP_Error('access_control_unavailable', 'Controllo accessi non disponibile.', array('status' => 503));
 
-if (!$can_access) {
-  status_header(403);
-  echo '<main class="site-main"><div class="container"><h2>Non autorizzato</h2></div></main>';
+if (is_wp_error($access_result)) {
+  $status = function_exists('ipt_access_error_status')
+    ? ipt_access_error_status($access_result)
+    : 403;
+  status_header($status);
+  get_header();
+  echo '<main class="site-main"><div class="container"><h2>' . esc_html($access_result->get_error_message()) . '</h2></div></main>';
   get_footer();
+  exit;
+}
+
+// Dopo aver validato l'utente, porta la sessione al gioco corretto.
+if (intval($session->gioco_id) !== get_the_ID()) {
+  wp_safe_redirect(add_query_arg(['invito_uuid' => $invito_uuid], get_permalink(intval($session->gioco_id))));
   exit;
 }
 
@@ -65,10 +62,13 @@ $iframe_src = trim((string) get_field('unity_build_url', $session->gioco_id));
 
 if ($iframe_src === '') {
   status_header(500);
+  get_header();
   echo '<main class="site-main"><div class="container"><h2>Percorso Build Unity non configurato per questo gioco.</h2></div></main>';
   get_footer();
   exit;
 }
+
+get_header();
 ?>
 <main class="site-main">
   <div class="container">
