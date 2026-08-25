@@ -88,3 +88,34 @@ I corsi sono protetti sia sull'URL frontend sia negli endpoint REST del singolo 
 L'archivio pubblico `/Corsi` resta consultabile integralmente dai visitatori anonimi come catalogo. Per gli utenti autenticati, l'archivio e le altre liste frontend vengono filtrati con la matrice cumulativa del piano attivo; utenti autenticati senza un piano riconosciuto non vedono corsi disponibili.
 
 Quando un utente autenticato prova ad aprire un contenuto non consentito, viene reindirizzato alla pagina Elementor pubblicata con slug `/accesso-riservato/`. La pagina viene servita con status HTTP 403, intestazione `noindex` e cache disabilitata. Se la pagina manca o non è pubblicata, il plugin mostra un messaggio di emergenza tramite WordPress.
+
+
+Dashboard degli utenti invitati
+
+Il plugin `Innerplay - Inviti Manager` espone lo shortcode:
+
+`[innerplay_dashboard_invitato]`
+
+Lo shortcode mostra gli inviti ricevuti per il Tool Scrivania e per i giochi, organizzati nelle tab `Attivi` e `Non più disponibili`. La classificazione dipende dalla disponibilità effettiva: un invito già utilizzato rimane tra gli attivi finché la relativa sessione può ancora essere aperta. Per ogni invito vengono indicati stato, mittente, date disponibili e pulsante di accesso; quelli conclusi, scaduti o revocati rimangono visibili come storico.
+
+La corrispondenza con l'utente segue questa regola di sicurezza:
+
+- se l'invito è già associato a un ID utente, può vederlo soltanto quell'utente;
+- l'indirizzo email viene usato come fallback soltanto per gli inviti non ancora associati a un ID utente.
+
+Configurazione della pagina con Elementor:
+
+1. creare una pagina intitolata `Dashboard invitato` con slug esatto `dashboard-invitato`;
+2. scegliere il layout `Elementor Full Width`;
+3. nascondere il titolo standard della pagina, perché lo shortcode include già il proprio titolo;
+4. inserire un widget Shortcode con `[innerplay_dashboard_invitato]`;
+5. non applicare restrizioni Paid Memberships Pro alla pagina;
+6. pubblicare la pagina ed escluderla da eventuali cache di pagina/CDN.
+
+La pagina richiede comunque il login e imposta automaticamente intestazioni anti-cache. La logica di redirect dopo il login è:
+
+- utenti con piano Welcome, Professional o Gold e amministratori: `/dashboard-utente/`;
+- utenti senza piano ma con almeno un invito ricevuto: `/dashboard-invitato/`;
+- utenti senza piano e senza inviti: pagina dei livelli PMPro.
+
+I link diretti contenuti nelle email di invito hanno sempre la precedenza sul redirect predefinito. Anche un abbonato può aprire `I miei inviti` dal menu quando ha ricevuto inviti. Dopo la pubblicazione della nuova pagina, la vecchia pagina basata sul template `page-gestione-inviti.php` viene reindirizzata alla dashboard Elementor.

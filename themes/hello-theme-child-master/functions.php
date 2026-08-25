@@ -133,6 +133,80 @@ function crea_corsi_fake_tutor_lms() {
     update_option('corsi_fake_creati', true);
 }
 
+/**
+ * Restituisce l'URL della dashboard dedicata agli inviti.
+ *
+ * La nuova pagina Elementor ha la precedenza; finche non viene pubblicata,
+ * resta disponibile la vecchia pagina basata sul template del tema.
+ */
+function ipt_get_invited_dashboard_url($allow_legacy = true) {
+    $dashboard_page = get_page_by_path('dashboard-invitato', OBJECT, 'page');
+    if ($dashboard_page instanceof WP_Post && $dashboard_page->post_status === 'publish') {
+        return get_permalink($dashboard_page);
+    }
+
+    if (!$allow_legacy) {
+        return '';
+    }
+
+    $legacy_page = get_page_by_path('gestione-inviti', OBJECT, 'page');
+    if ($legacy_page instanceof WP_Post && $legacy_page->post_status === 'publish') {
+        return get_permalink($legacy_page);
+    }
+
+    $legacy_pages = get_pages(array(
+        'post_type' => 'page',
+        'post_status' => 'publish',
+        'number' => 1,
+        'meta_key' => '_wp_page_template',
+        'meta_value' => 'page-gestione-inviti.php',
+    ));
+
+    return !empty($legacy_pages) && $legacy_pages[0] instanceof WP_Post
+        ? get_permalink($legacy_pages[0])
+        : '';
+}
+
+/**
+ * Decide la destinazione predefinita di un utente dopo il login.
+ *
+ * Priorita:
+ * 1. piano attivo o amministratore -> dashboard abbonato;
+ * 2. nessun piano ma almeno un invito ricevuto -> dashboard invitato;
+ * 3. nessun accesso -> pagina dei livelli.
+ */
+function ipt_get_user_dashboard_url($user_id = 0) {
+    $user_id = $user_id > 0 ? intval($user_id) : get_current_user_id();
+    if ($user_id <= 0 || !get_userdata($user_id)) {
+        return home_url('/');
+    }
+
+    $access_tier = function_exists('ipt_get_user_access_tier')
+        ? ipt_get_user_access_tier($user_id)
+        : '';
+
+    if ($access_tier !== '' || user_can($user_id, 'manage_options')) {
+        return home_url('/dashboard-utente/');
+    }
+
+    if (function_exists('gim_user_has_received_invites') && gim_user_has_received_invites($user_id)) {
+        $invited_dashboard_url = ipt_get_invited_dashboard_url(false);
+        if ($invited_dashboard_url !== '') {
+            return $invited_dashboard_url;
+        }
+
+        // Il vecchio template supporta solo gli inviti Scrivania, non quelli ai giochi.
+        if (function_exists('ipt_scrivania_user_has_active_invites') && ipt_scrivania_user_has_active_invites($user_id)) {
+            $legacy_dashboard_url = ipt_get_invited_dashboard_url(true);
+            if ($legacy_dashboard_url !== '') {
+                return $legacy_dashboard_url;
+            }
+        }
+    }
+
+    return function_exists('pmpro_url') ? pmpro_url('levels') : home_url('/livelli/');
+}
+
 /* DOPO LOGIN REDIRECT SULLA DASHBOARD CUSTOM */
 function ipt_login_redirect_dashboard($redirect_to, $request, $user) {
     // Controlla che l'utente sia loggato correttamente
@@ -147,7 +221,8 @@ function ipt_login_redirect_dashboard($redirect_to, $request, $user) {
             $is_invite_flow = (!empty($path) && (
                 strpos($path, '/invito-scrivania') !== false ||
                 strpos($path, '/tool-scrivania') !== false ||
-                strpos($path, '/gioca') !== false
+                strpos($path, '/gioca') !== false ||
+                strpos($path, '/dashboard-invitato') !== false
             ));
             $is_course_flow = (!empty($path) && (
                 stripos($path, '/Corsi/') !== false ||
@@ -166,8 +241,7 @@ function ipt_login_redirect_dashboard($redirect_to, $request, $user) {
             }
         }
 
-        // Default: reindirizza alla pagina dashboard personalizzata
-        return site_url('/dashboard-utente');
+        return ipt_get_user_dashboard_url(intval($user->ID));
     }
     return $redirect_to;
 }
@@ -175,11 +249,32 @@ add_filter('login_redirect', 'ipt_login_redirect_dashboard', 10, 3);
 /* conto-iscrizione REDIRECT SULLA DASHBOARD CUSTOM */
 function ipt_redirect_conto_iscrizione() {
     if (is_page('conto-iscrizione') && is_user_logged_in()) {
-        wp_redirect(site_url('/dashboard-utente'));
+        wp_safe_redirect(ipt_get_user_dashboard_url(get_current_user_id()));
         exit;
     }
 }
 add_action('template_redirect', 'ipt_redirect_conto_iscrizione');
+
+/**
+ * Quando la nuova pagina Elementor esiste, unifica anche il vecchio URL inviti.
+ */
+function ipt_redirect_legacy_invited_dashboard() {
+    if (!is_page_template('page-gestione-inviti.php')) {
+        return;
+    }
+
+    $dashboard_page = get_page_by_path('dashboard-invitato', OBJECT, 'page');
+    if (!($dashboard_page instanceof WP_Post) || $dashboard_page->post_status !== 'publish') {
+        return;
+    }
+
+    $target_url = get_permalink($dashboard_page);
+    if ($target_url && get_queried_object_id() !== intval($dashboard_page->ID)) {
+        wp_safe_redirect($target_url, 302);
+        exit;
+    }
+}
+add_action('template_redirect', 'ipt_redirect_legacy_invited_dashboard', 20);
 
 /* MENU UTENTE */
 require_once get_stylesheet_directory() . '/menu-utente.php';
