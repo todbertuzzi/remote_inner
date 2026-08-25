@@ -22,6 +22,10 @@ function gim_install_game_sessions_schema() {
         host_user_id BIGINT UNSIGNED NOT NULL,
         gioco_id BIGINT UNSIGNED NOT NULL,
         invito_uuid CHAR(36) NOT NULL,
+        invited_email VARCHAR(191) NULL,
+        invited_user_id BIGINT UNSIGNED NULL,
+        claimed_at DATETIME NULL,
+        first_access_at DATETIME NULL,
         join_code VARCHAR(64) NULL,
         status VARCHAR(20) NOT NULL DEFAULT 'created',
         created_at DATETIME NOT NULL,
@@ -30,9 +34,49 @@ function gim_install_game_sessions_schema() {
         UNIQUE KEY invito_uuid (invito_uuid),
         KEY host_user_id (host_user_id),
         KEY gioco_id (gioco_id),
+        KEY invited_email (invited_email),
+        KEY invited_user_id (invited_user_id),
         KEY expires_at (expires_at)
     ) {$charset_collate};";
     dbDelta($sql_sessions);
+
+    $session_columns = array(
+        'invited_email' => "ALTER TABLE {$table_sessions} ADD COLUMN invited_email VARCHAR(191) NULL DEFAULT NULL",
+        'invited_user_id' => "ALTER TABLE {$table_sessions} ADD COLUMN invited_user_id BIGINT UNSIGNED NULL DEFAULT NULL",
+        'claimed_at' => "ALTER TABLE {$table_sessions} ADD COLUMN claimed_at DATETIME NULL DEFAULT NULL",
+        'first_access_at' => "ALTER TABLE {$table_sessions} ADD COLUMN first_access_at DATETIME NULL DEFAULT NULL",
+    );
+
+    foreach ($session_columns as $column_name => $alter_sql) {
+        $column_exists = $wpdb->get_var($wpdb->prepare(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+            $table_sessions,
+            $column_name
+        ));
+
+        if (!$column_exists) {
+            $wpdb->query($alter_sql);
+        }
+    }
+
+    $session_indexes = array(
+        'invited_email' => "ALTER TABLE {$table_sessions} ADD KEY invited_email (invited_email)",
+        'invited_user_id' => "ALTER TABLE {$table_sessions} ADD KEY invited_user_id (invited_user_id)",
+    );
+
+    foreach ($session_indexes as $column_name => $alter_sql) {
+        $has_index = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+            $table_sessions,
+            $column_name
+        ));
+
+        if (intval($has_index) === 0) {
+            $wpdb->query($alter_sql);
+        }
+    }
 
     // 2) Adegua tabella inviti gioco (riuso)
     $table_inviti_gioco = $wpdb->prefix . 'giochi_invitati';
@@ -107,6 +151,88 @@ function gim_install_game_sessions_schema() {
     gim_ensure_contacts_table();
 }
 register_activation_hook(__FILE__, 'gim_install_game_sessions_schema');
+
+function gim_game_user_can_access_session($session, $current_user) {
+    if (!is_object($session) || !($current_user instanceof WP_User) || intval($current_user->ID) <= 0) {
+        return false;
+    }
+
+    $invited_user_id = isset($session->invited_user_id) ? intval($session->invited_user_id) : 0;
+    $invited_email = isset($session->invited_email) ? sanitize_email((string) $session->invited_email) : '';
+
+    if ($invited_user_id > 0) {
+        return $invited_user_id === intval($current_user->ID);
+    }
+
+    if ($invited_email !== '') {
+        return strcasecmp($invited_email, (string) $current_user->user_email) === 0;
+    }
+
+    global $wpdb;
+    $table_inviti = $wpdb->prefix . 'giochi_invitati';
+
+    $by_user_id = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$table_inviti} WHERE session_id = %d AND utente_id = %d",
+        intval($session->id),
+        intval($current_user->ID)
+    ));
+    if (intval($by_user_id) > 0) {
+        return true;
+    }
+
+    $by_email = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$table_inviti} WHERE session_id = %d AND invitato_email = %s",
+        intval($session->id),
+        (string) $current_user->user_email
+    ));
+
+    return intval($by_email) > 0;
+}
+
+function gim_game_bind_invited_user($session, $current_user) {
+    if (!is_object($session) || !($current_user instanceof WP_User) || intval($current_user->ID) <= 0) {
+        return false;
+    }
+
+    $invited_user_id = isset($session->invited_user_id) ? intval($session->invited_user_id) : 0;
+    $invited_email = isset($session->invited_email) ? sanitize_email((string) $session->invited_email) : '';
+
+    if ($invited_user_id > 0 || $invited_email === '' || strcasecmp($invited_email, (string) $current_user->user_email) !== 0) {
+        return false;
+    }
+
+    global $wpdb;
+    $table_sessions = $wpdb->prefix . 'game_sessions';
+    $now = current_time('mysql');
+
+    $updated = $wpdb->update(
+        $table_sessions,
+        array(
+            'invited_user_id' => intval($current_user->ID),
+            'claimed_at' => $now,
+            'first_access_at' => $now,
+        ),
+        array('id' => intval($session->id)),
+        array('%d', '%s', '%s'),
+        array('%d')
+    );
+
+    if ($updated === false) {
+        return false;
+    }
+
+    $table_inviti = $wpdb->prefix . 'giochi_invitati';
+    $wpdb->query($wpdb->prepare(
+        "UPDATE {$table_inviti}
+         SET utente_id = %d
+         WHERE session_id = %d AND utente_id IS NULL AND invitato_email = %s",
+        intval($current_user->ID),
+        intval($session->id),
+        (string) $current_user->user_email
+    ));
+
+    return true;
+}
 
 function gim_ensure_contacts_table() {
     static $table_ready = null;
@@ -462,21 +588,23 @@ add_action('plugins_loaded', function () {
  * Logica:
  * - Richiede utente loggato.
  * - Valida il post 'gioco'.
- * - Sanifica e limita a massimo 3 email per sessione.
+ * - Sanifica e consente una sola email per sessione.
  * - Crea una sessione in wp_game_sessions con invito_uuid unico e stato 'created'.
- * - Collega gli invitati in wp_giochi_invitati impostando session_id (senza usare il token legacy).
- * - Invia email agli invitati con link: /gioca?invito={invito_uuid}.
- * - Risponde con HTML contenente esito e link host da condividere.
+ * - Salva invited_email e, se possibile, invited_user_id direttamente sulla sessione.
+ * - Mantiene il collegamento in wp_giochi_invitati per compatibilità dati.
+ * - Invia email all'invitato con link: /gioca?invito={invito_uuid}.
+ * - Risponde con HTML contenente esito e link sessione.
  *
  * Note:
- * - Riuso tabella inviti: wp_giochi_invitati (con colonna session_id).
+ * - Riuso tabella inviti: wp_giochi_invitati (compatibilità con session_id e binding storici).
  * - Il campo 'token' è deprecato e non più valorizzato.
- * - Il join_code viene impostato dall’host via REST: POST /wp-json/game/v1/set-join-code.
  */
 add_action('wp_ajax_attiva_gioco', 'gim_attiva_gioco');
 
 function gim_attiva_gioco()
 {
+    gim_install_game_sessions_schema();
+
     if (!is_user_logged_in()) {
         echo '<div style="color:red;">Devi essere loggato.</div>';
         wp_die();
@@ -502,15 +630,20 @@ function gim_attiva_gioco()
         wp_die();
     }
 
-    // Sanifica e limita a 3
+    // Sanifica e limita a 1: ogni sessione gioco ora ha un solo invitato.
     $emails = array_values(array_unique(array_filter(array_map('sanitize_email', $emails))));
     if (empty($emails)) {
         echo '<div style="color:red;">Nessuna email valida.</div>';
         wp_die();
     }
-    if (count($emails) > 3) {
-        $emails = array_slice($emails, 0, 3);
+    if (count($emails) !== 1) {
+        echo '<div style="color:red;">Seleziona un solo contatto.</div>';
+        wp_die();
     }
+
+    $invited_email = $emails[0];
+    $invited_user = get_user_by('email', $invited_email);
+    $invited_user_id = $invited_user instanceof WP_User ? intval($invited_user->ID) : null;
 
     global $wpdb;
     $table_sessions = $wpdb->prefix . 'game_sessions';
@@ -528,10 +661,12 @@ function gim_attiva_gioco()
         'host_user_id' => $host_id,
         'gioco_id'     => $gioco_id,
         'invito_uuid'  => $invito_uuid,
+        'invited_email' => $invited_email,
+        'invited_user_id' => $invited_user_id,
         'status'       => 'created',
         'created_at'   => current_time('mysql'),
         'expires_at'   => $expires_at,
-    ], ['%d','%d','%s','%s','%s','%s']);
+    ], ['%d','%d','%s','%s','%d','%s','%s','%s']);
 
     if ($ins === false) {
         echo '<div style="color:red;">Errore creazione sessione.</div>';
@@ -540,31 +675,25 @@ function gim_attiva_gioco()
 
     $session_id = (int) $wpdb->insert_id;
 
-    // Inserisci invitati
-    $inviati = 0;
-    foreach ($emails as $email) {
-        $ok = $wpdb->insert($table_inviti, [
-            'invitante_id'   => $host_id,
-            'invitato_email' => $email,
-            'session_id'     => $session_id,
-            'created_at'     => current_time('mysql'),
-        ], ['%d','%s','%d','%s']);
+    $ok = $wpdb->insert($table_inviti, [
+        'invitante_id'   => $host_id,
+        'invitato_email' => $invited_email,
+        'session_id'     => $session_id,
+        'created_at'     => current_time('mysql'),
+    ], ['%d','%s','%d','%s']);
 
-        if ($ok !== false) {
-            $link = add_query_arg(['invito' => $invito_uuid], home_url('/gioca'));
-            wp_mail(
-                $email,
-                'Sei stato invitato a giocare',
-                'Clicca per entrare in partita: ' . esc_url($link),
-                ['Content-Type: text/plain; charset=UTF-8']
-            );
-            $inviati++;
-        }
+    $link = add_query_arg(['invito' => $invito_uuid], home_url('/gioca'));
+    if ($ok !== false) {
+        wp_mail(
+            $invited_email,
+            'Sei stato invitato a giocare',
+            'Clicca per entrare in partita: ' . esc_url($link),
+            ['Content-Type: text/plain; charset=UTF-8']
+        );
     }
 
-    $link_host = add_query_arg(['invito' => $invito_uuid], home_url('/gioca'));
-    echo '<div style="color:green;">Partita creata. Invitati: ' . intval($inviati) . '</div>';
-    echo '<div>Link da condividere: <a href="' . esc_url($link_host) . '" target="_blank">' . esc_html($link_host) . '</a></div>';
+    echo '<div style="color:green;">Partita creata per: ' . esc_html($invited_email) . '</div>';
+    echo '<div>Link sessione: <a href="' . esc_url($link) . '" target="_blank">' . esc_html($link) . '</a></div>';
     wp_die();
 }
 
@@ -737,14 +866,18 @@ function cim_carica_contatti_utente()
     }
 
     if (isset($_POST['modal'])) {
-        // Vista per la modale (checkbox)
+        $single_select = !empty($_POST['single_select']);
+        $input_type = $single_select ? 'radio' : 'checkbox';
+        $input_name = $single_select ? 'contatto_modal_single' : 'contatto_modal_check[]';
+
+        // Vista per la modale
         if (!$contatti) {
             echo '<p>Nessun contatto trovato.</p>';
         } else {
             echo '<ul style="max-height:200px; overflow:auto; padding-left:0;">';
             foreach ($contatti as $c) {
                 echo '<li style="list-style:none; margin-bottom:6px;">';
-                echo '<label><input type="checkbox" name="contatto_modal_check[]" value="' . esc_attr($c->email) . '"> ';
+                echo '<label><input type="' . esc_attr($input_type) . '" name="' . esc_attr($input_name) . '" value="' . esc_attr($c->email) . '"> ';
                 echo esc_html($c->nome) . ' (' . esc_html($c->email) . ')';
                 echo '</label></li>';
             }

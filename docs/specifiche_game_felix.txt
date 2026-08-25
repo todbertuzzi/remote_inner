@@ -1,130 +1,130 @@
-📄 Specifiche implementazione inviti WordPress per gioco multiplayer Unity3D con Relay
+📄 Specifiche implementazione inviti WordPress per gioco Unity WebGL single-user
+
 🎯 Obiettivo
 Permettere a un utente pagante sulla piattaforma WordPress di:
-Selezionare un gioco Unity (WebGL) disponibile
-Invitare fino a 3 utenti registrati
-Avviare una sessione multiplayer in tempo reale usando Unity Relay
-Gestire tutto il flusso tramite WordPress, senza dipendenze da Unity Lobby
+- selezionare un gioco Unity disponibile in dashboard;
+- invitare un solo contatto per sessione;
+- generare un link valido 24 ore;
+- permettere l'accesso solo all'utente invitato;
+- caricare il build corretto del gioco tramite il campo ACF unity_build_url.
 
 🧩 Componenti principali
-
+- Dashboard utente: page-dashboard-utente.php
+- Creazione invito: innerplay-inviti-manager.php, action AJAX attiva_gioco
+- Gate ingresso invito: page-gioca.php
+- Pagina finale del gioco: single-gioco.php
+- API REST residue per Unity: /wp-json/game/v1/user-profile
 
 📦 Struttura dati (DB)
 Tabella: wp_game_sessions
+- id
+- host_user_id
+- gioco_id
+- invito_uuid
+- invited_email
+- invited_user_id
+- claimed_at
+- first_access_at
+- status
+- created_at
+- expires_at
 
-
-Tabella: wp_game_session_invites
-
+Tabella legacy riusata: wp_giochi_invitati
+- mantenuta per compatibilità storica e tracciamento minimo
+- non è più la fonte autorevole dei permessi della sessione
 
 🔗 Link invito
 Ogni sessione genera un link del tipo:
 
 https://miosito.it/gioca?invito=56fb1d23-aa22-4ed3-910b-8c29ab763111
-// Accesso consentito solo a host e utenti invitati (login WP obbligatorio).
 
+Accesso consentito solo all'utente invitato, con login WordPress obbligatorio.
 
 ⚙️ Flusso d’uso
+🟢 Creazione sessione
+- L'utente abilitato apre la dashboard.
+- Sceglie un gioco disponibile.
+- Seleziona un solo contatto dalla rubrica.
+- Clicca Invia invito.
+
 WordPress:
-- Registra la sessione (wp_game_sessions) con invito_uuid e expires_at = now+24h
-- Registra gli invitati (riuso wp_giochi_invitati, con session_id)
-🟢 Creazione sessione (host)
-L’utente paga o ha diritto a giocare
-Seleziona un gioco Unity
-Sceglie fino a 3 utenti da una rubrica (autocomplete WP)
-Clicca “Crea partita”
-WordPress:
-Registra la sessione (wp_game_sessions)
-Registra gli invitati (wp_game_session_invites)
-Genera link univoco
-L’interfaccia mostra il link da condividere
+- valida il post di tipo gioco;
+- valida una sola email destinataria;
+- crea una riga in wp_game_sessions con invito_uuid univoco e expires_at = now + 24h;
+- salva invited_email e, se esiste già un utente WordPress con quella email, invited_user_id;
+- invia una email con link /gioca?invito={invito_uuid}.
 
-🟡 Avvio sessione (Unity host)
+🟡 Apertura link invito
+- L'utente invitato apre /gioca?invito=...;
+- se non è loggato, viene reindirizzato al login WordPress con redirect di ritorno;
+- WordPress verifica che la sessione esista e non sia scaduta;
+- WordPress verifica che l'utente loggato coincida con invited_user_id oppure con invited_email;
+- se invited_user_id è ancora vuoto ma l'email coincide, il sistema esegue il bind dell'utente alla sessione;
+- infine l'utente viene reindirizzato al permalink del gioco con invito_uuid.
 
-L’host apre il link da loggato
-WordPress verifica che è l’host → carica Unity WebGL
-Unity crea Relay Allocation (es. per 3 peer)
-Unity ottiene joinCode →  Unity invia a WP:
-POST /wp-json/game/v1/set-join-code
-{ invito_uuid: "...", joinCode: "XYZ123" }
-Effetto:
-- Aggiorna join_code
-- status = "started"
-- Estende expires_at di +2h (finestra runtime)
-
-// TEST -> 
-// Esegui dal contesto della pagina del gioco (dove vedi UNITY_NONCE e INVITO_UUID)
-fetch('/wp-json/game/v1/set-join-code', {
-  method: 'POST',
-  headers: {'Content-Type':'application/json','X-WP-Nonce': UNITY_NONCE},
-  body: JSON.stringify({ invito_uuid: INVITO_UUID, joinCode: 'ABC123' })
-}).then(r=>r.json()).then(console.log)
-
-
-🔵 Accesso invitati
-L’invitato apre il link da loggato
-WordPress verifica che è nella lista → carica Unity WebGL
-Unity effettua polling:
-GET /wp-json/game/v1/get-join-code?invito_uuid=...
-Header: X-WP-Nonce (wp_rest)
-→ finché non riceve joinCode
-Unity si connette a Relay con il codice
+🔵 Apertura gioco
+In single-gioco.php WordPress:
+- ricarica la sessione tramite invito_uuid;
+- verifica di nuovo esistenza, scadenza e autorizzazione;
+- usa titolo_gioco e descrizione_gioco dal post gioco associato alla sessione;
+- usa unity_build_url del post gioco associato alla sessione per valorizzare l'iframe Unity.
 
 🔄 API REST (WordPress → Unity)
-GET /wp-json/game/v1/get-join-code
+Endpoint attivo:
+GET /wp-json/game/v1/user-profile
 - Input: invito_uuid
+- Autenticazione: utente loggato e autorizzato sulla sessione
 - Output:
   {
     "status": "ok",
-    "joinCode": "XYZ123" | null,
-    "isGuest": true|false,
-    "guestId": 123
+    "user": {
+      "id": 123,
+      "username": "nomeutente",
+      "display_name": "Nome Utente",
+      "email": "utente@example.com"
+    },
+    "session": {
+      "id": 10,
+      "gioco_id": 55,
+      "invito_uuid": "uuid-sessione",
+      "expires_at": "2026-05-14 10:30:00"
+    }
   }
 - Errori possibili: 401 auth_required, 403 forbidden, 404 session_not_found, 410 expired
 
-POST /wp-json/game/v1/set-join-code
-- Input:
-  { "invito_uuid": "...", "joinCode": "XYZ123" }
-- Autenticazione: host loggato
-- Errori possibili: 401, 403, 404, 410, 500
-
-Autenticazione: host loggato Effetto: aggiorna la sessione
+Endpoint rimossi dal flusso giochi:
+- GET /wp-json/game/v1/get-join-code
+- POST /wp-json/game/v1/set-join-code
 
 🔐 Sicurezza
-- Login obbligatorio
-- Verifiche:
-  - is_host → può inviare joinCode
-  - is_invited_user → può accedere
-- Gating applicato sia su /gioca (page-gioca.php) sia sul singolo gioco (single-gioco.php)
-- Link non condivisibili con utenti non autorizzati
-Tutti gli accessi richiedono current_user loggato
-Verifiche su:
-is_host → può inviare joinCode
-is_invited_user → può accedere al gioco
+- Login obbligatorio.
+- Gating applicato sia su /gioca sia sul singolo gioco.
+- Il link non abilita l'accesso a utenti diversi dall'invitato previsto.
+- Dopo il primo accesso riuscito, la sessione può essere vincolata all'utente WordPress specifico tramite invited_user_id.
 
 ⏳ Scadenza inviti/sessioni
-- expires_at impostato alla creazione (+24h)
-- API e pagine rifiutano accesso se scaduta (HTTP 410)
-- Alla chiamata set-join-code, la scadenza viene estesa di +2h per la durata della sessione
+- expires_at viene impostato alla creazione della sessione a +24h.
+- page-gioca.php, single-gioco.php e l'endpoint user-profile rifiutano accesso se la sessione è scaduta.
+- Non esiste più estensione automatica della scadenza tramite join code.
 
 🎛️ Limiti
-- Massimo 3 invitati per sessione (enforced lato server)
+- Una sessione gioco corrisponde a un solo invitato.
+- L'host crea l'invito ma non è più considerato partecipante della sessione di gioco.
 
-📌 Deviazioni progettuali rispetto al disegno iniziale
-- Tabella inviti dedicata (wp_game_session_invites) non creata:
-  si riusa wp_giochi_invitati aggiungendo session_id, indici e binding utente_id
-- Legacy “token” per i Giochi: rimosso (campo mantenuto nullable per compatibilità schema)
+📌 Note implementative
+- La dashboard mostra il titolo del gioco usando prima ACF titolo_gioco e, se vuoto, il titolo standard del post.
+- single-gioco.php mostra un errore esplicito se unity_build_url non è configurato.
+- wp_giochi_invitati resta presente per compatibilità con dati e binding pregressi, ma la sessione vive in wp_game_sessions.
 
 🔧 Estensioni future (opzionali)
-Notifiche email agli invitati
-Pannello “Le mie partite” per host e guest
-Riconnessione a sessioni attive
-Chat pre-partita
-Statistiche post-partita
-
-✅ Requisiti minimi sistema
+- Pannello “Le mie partite” per l'invitato.
+- Storico sessioni giocate.
+- Revoca manuale di un invito prima della scadenza.
+- Logging diagnostico delle aperture link e dei bind utente.
 
 📝 Changelog
-- 2025-09-25: introdotta scadenza inviti (expires_at), estensione +2h su set-join-code, limite 3 invitati per sessione, gating doppio; documentato riuso wp_giochi_invitati e deprecazione token
+- 2025-09-25: introdotta scadenza inviti con expires_at e gating doppio.
+- 2026-05-13: flusso giochi semplificato a single-user; rimosso il modello host/guest con join code; limite ridotto a un solo invitato per sessione; build Unity risolto via ACF unity_build_url; dashboard allineata al campo ACF titolo_gioco.
 
 
 

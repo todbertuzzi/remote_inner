@@ -40,39 +40,35 @@ if (intval($session->gioco_id) !== get_the_ID()) {
   exit;
 }
 
-// Verifica permessi: host o invitato
+// Verifica permessi: accesso consentito solo all'utente invitato per questa sessione
 $current_user = wp_get_current_user();
-$isHost = intval($session->host_user_id) === intval($current_user->ID);
-if (!$isHost) {
-  $isInvited = $wpdb->get_var($wpdb->prepare(
-    "SELECT COUNT(*) FROM {$wpdb->prefix}giochi_invitati
-         WHERE session_id = %d AND (utente_id = %d OR invitato_email = %s)",
-    $session->id,
-    $current_user->ID,
-    $current_user->user_email
-  ));
-  if (!$isInvited) {
-    status_header(403);
-    echo '<main class="site-main"><div class="container"><h2>Non autorizzato</h2></div></main>';
-    get_footer();
-    exit;
-  }
-  // Bind utente_id alla prima visita (se necessario)
-  $wpdb->query($wpdb->prepare(
-    "UPDATE {$wpdb->prefix}giochi_invitati
-         SET utente_id = %d
-         WHERE session_id = %d AND utente_id IS NULL AND invitato_email = %s",
-    $current_user->ID,
-    $session->id,
-    $current_user->user_email
-  ));
+$can_access = function_exists('gim_game_user_can_access_session')
+  ? gim_game_user_can_access_session($session, $current_user)
+  : false;
+
+if (!$can_access) {
+  status_header(403);
+  echo '<main class="site-main"><div class="container"><h2>Non autorizzato</h2></div></main>';
+  get_footer();
+  exit;
+}
+
+if (function_exists('gim_game_bind_invited_user')) {
+  gim_game_bind_invited_user($session, $current_user);
 }
 
 // Da qui in poi: utente autorizzato
 $unity_nonce = wp_create_nonce('wp_rest');
-$titolo_gioco = get_field('titolo_gioco');
-$descrizione_gioco = get_field('descrizione_gioco');
-$iframe_src = '/wp-content/uploads/giochi/memory-test/WebGL/index.html';
+$titolo_gioco = get_field('titolo_gioco', $session->gioco_id);
+$descrizione_gioco = get_field('descrizione_gioco', $session->gioco_id);
+$iframe_src = trim((string) get_field('unity_build_url', $session->gioco_id));
+
+if ($iframe_src === '') {
+  status_header(500);
+  echo '<main class="site-main"><div class="container"><h2>Percorso Build Unity non configurato per questo gioco.</h2></div></main>';
+  get_footer();
+  exit;
+}
 ?>
 <main class="site-main">
   <div class="container">
@@ -98,7 +94,7 @@ $iframe_src = '/wp-content/uploads/giochi/memory-test/WebGL/index.html';
         id: <?php echo intval($current_user->ID); ?>,
         username: "<?php echo esc_js($current_user->user_login); ?>",
         display_name: "<?php echo esc_js($current_user->display_name); ?>",
-        role: "<?php echo $isHost ? 'host' : 'guest'; ?>"
+        role: "guest"
       };
       window.addEventListener("message", function(ev) {
         if (ev.data === "richiediNonce") {
@@ -132,70 +128,6 @@ $iframe_src = '/wp-content/uploads/giochi/memory-test/WebGL/index.html';
         invito_uuid: INVITO_UUID,
         user: USER_PRERENDER
       });
-
-
-      /*  async function testGetJoinCode() {
-         try {
-           const r = await fetch('/wp-json/game/v1/get-join-code?invito_uuid=' + encodeURIComponent(INVITO_UUID), {
-             method: 'GET',
-             headers: {
-               'X-WP-Nonce': UNITY_NONCE
-             }
-           });
-           const data = await r.json();
-           console.log("Risposta get-join-code:", data);
-         } catch (e) {
-           console.error(e);
-         }
-       }
-       if (INVITO_UUID) testGetJoinCode(); */
-
-      async function fetchUserProfile() {
-        try {
-          const r = await fetch('/wp-json/game/v1/user-profile?invito_uuid=' + encodeURIComponent(INVITO_UUID), {
-            method: 'GET',
-            headers: {
-              'X-WP-Nonce': UNITY_NONCE
-            }
-          });
-          const data = await r.json();
-          console.log('user-profile:', data);
-          unityPost({
-            tipo: "user_profile",
-            valore: data
-          });
-        } catch (e) {
-          console.error(e);
-        }
-      }
-
-      async function pollJoinCode() {
-        try {
-          const r = await fetch('/wp-json/game/v1/get-join-code?invito_uuid=' + encodeURIComponent(INVITO_UUID), {
-            method: 'GET',
-            headers: {
-              'X-WP-Nonce': UNITY_NONCE
-            }
-          });
-          const data = await r.json();
-          console.log('get-join-code:', data);
-          unityPost({
-            tipo: "join_code_payload",
-            valore: data
-          });
-          if (data.status === 'ok' && data.joinCode) {
-            // Stop polling
-          } else {
-            setTimeout(pollJoinCode, 3000);
-          }
-        } catch (e) {
-          console.error(e);
-          setTimeout(pollJoinCode, 5000);
-        }
-      }
-
-      fetchUserProfile();
-      pollJoinCode();
     </script>
   </div>
 </main>

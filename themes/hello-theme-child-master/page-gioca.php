@@ -33,26 +33,19 @@ if (!empty($session->expires_at) && current_time('timestamp') > strtotime($sessi
 }
 
 $current_user = wp_get_current_user();
-$isHost = intval($session->host_user_id) === intval($current_user->ID);
+$can_access = function_exists('gim_game_user_can_access_session')
+    ? gim_game_user_can_access_session($session, $current_user)
+    : false;
 
-// Verifica se è invitato
-if (!$isHost) {
-    $isInvited = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM {$wpdb->prefix}giochi_invitati 
-         WHERE session_id = %d AND (utente_id = %d OR invitato_email = %s)",
-        $session->id, $current_user->ID, $current_user->user_email
-    ));
-    
-    if (!$isInvited) {
-        echo '<h2>Non autorizzato</h2>';
-        echo '<h2>Non autorizzato</h2>';
-        echo '<h2>Non autorizzato</h2>';
-        echo '<h2>Non autorizzato</h2>';
-        echo '<h2>Non autorizzato</h2>';
-        echo '<h2>Non autorizzato</h2>';
-        get_footer();
-        exit;
-    }
+if (!$can_access) {
+    status_header(403);
+    echo '<h2>Non autorizzato</h2>';
+    get_footer();
+    exit;
+}
+
+if (function_exists('gim_game_bind_invited_user')) {
+    gim_game_bind_invited_user($session, $current_user);
 }
 
 // Redirect al gioco con parametri corretti

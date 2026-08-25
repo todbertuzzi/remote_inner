@@ -22,6 +22,10 @@ define( 'HELLO_ELEMENTOR_CHILD_VERSION', '2.0.0' );
  * @return void
  */
 function hello_elementor_child_scripts_styles() {
+	$stylesheet_path = get_stylesheet_directory() . '/style.css';
+	$stylesheet_version = file_exists( $stylesheet_path )
+		? (string) filemtime( $stylesheet_path )
+		: HELLO_ELEMENTOR_CHILD_VERSION;
 
 	wp_enqueue_style(
 		'hello-elementor-child-style',
@@ -29,11 +33,33 @@ function hello_elementor_child_scripts_styles() {
 		[
 			'hello-elementor-theme-style',
 		],
-		HELLO_ELEMENTOR_CHILD_VERSION
+		$stylesheet_version
 	);
 
 }
 add_action( 'wp_enqueue_scripts', 'hello_elementor_child_scripts_styles', 20 );
+
+/**
+ * Carica gli stili della dashboard solo quando è attivo il relativo template.
+ */
+function hello_elementor_child_dashboard_styles() {
+	if ( ! is_page_template( 'page-dashboard-utente.php' ) ) {
+		return;
+	}
+
+	$stylesheet_path = get_stylesheet_directory() . '/dashboard.css';
+	if ( ! file_exists( $stylesheet_path ) ) {
+		return;
+	}
+
+	wp_enqueue_style(
+		'hello-elementor-child-dashboard-style',
+		get_stylesheet_directory_uri() . '/dashboard.css',
+		array( 'hello-elementor-child-style' ),
+		(string) filemtime( $stylesheet_path )
+	);
+}
+add_action( 'wp_enqueue_scripts', 'hello_elementor_child_dashboard_styles', 25 );
 
 //add_action('init', 'crea_corsi_fake_tutor_lms');
 
@@ -111,17 +137,25 @@ function crea_corsi_fake_tutor_lms() {
 function ipt_login_redirect_dashboard($redirect_to, $request, $user) {
     // Controlla che l'utente sia loggato correttamente
     if (isset($user->roles) && is_array($user->roles)) {
-        // Se WordPress ha già calcolato un redirect valido (es. flusso invito/tool), rispettalo.
+        // Se WordPress ha già calcolato un redirect valido per un flusso invito, rispettalo.
         // Nota: wp_login_form passa 'redirect', che finisce in redirect_to.
         $validated_redirect = wp_validate_redirect($redirect_to, '');
         if (!empty($validated_redirect)) {
             $path = wp_parse_url($validated_redirect, PHP_URL_PATH);
             $query = wp_parse_url($validated_redirect, PHP_URL_QUERY);
 
-            $is_invite_flow = (!empty($path) && (strpos($path, '/invito-scrivania') !== false || strpos($path, '/tool-scrivania') !== false));
-            $has_token_query = (!empty($query) && strpos($query, 'token=') !== false);
+            $is_invite_flow = (!empty($path) && (
+                strpos($path, '/invito-scrivania') !== false ||
+                strpos($path, '/tool-scrivania') !== false ||
+                strpos($path, '/gioca') !== false
+            ));
+            $has_invite_query = (!empty($query) && (
+                strpos($query, 'token=') !== false ||
+                strpos($query, 'invito=') !== false ||
+                strpos($query, 'invito_uuid=') !== false
+            ));
 
-            if ($is_invite_flow || $has_token_query) {
+            if ($is_invite_flow || $has_invite_query) {
                 return $validated_redirect;
             }
         }
