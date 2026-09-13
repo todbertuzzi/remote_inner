@@ -2,11 +2,144 @@
 /**
  * Plugin Name: Scrivania Collaborativa API
  * Description: API e integrazione con Pusher per il tool Scrivania
- * Version: 1.0
+ * Version: 1.1.0
  * Author: Emiliano Pallini
  */
 
 defined('ABSPATH') || exit;
+
+if (!defined('SCRIVANIA_PLUGIN_FILE')) {
+    define('SCRIVANIA_PLUGIN_FILE', __FILE__);
+}
+if (!defined('SCRIVANIA_PLUGIN_DIR')) {
+    define('SCRIVANIA_PLUGIN_DIR', plugin_dir_path(__FILE__));
+}
+
+/**
+ * Manifesto runtime dei mazzi. Il file viene sincronizzato dal progetto React
+ * tramite `npm run build:wp` ed è l'unica configurazione letta dal backend.
+ */
+function scrivania_get_decks_manifest() {
+    static $manifest = null;
+
+    if (is_array($manifest)) {
+        return $manifest;
+    }
+
+    $manifest_path = SCRIVANIA_PLUGIN_DIR . 'config/decks.json';
+    $decoded = array();
+    if (is_readable($manifest_path)) {
+        $decoded = json_decode((string) file_get_contents($manifest_path), true);
+    }
+
+    if (!is_array($decoded) || empty($decoded['decks']) || !is_array($decoded['decks'])) {
+        $decoded = array(
+            'schemaVersion' => 1,
+            'defaultDeckId' => 0,
+            'decks' => array(
+                array('id' => 0, 'key' => 'mazzo-0', 'label' => 'Mazzo 0', 'description' => 'Verticale', 'enabled' => true),
+                array('id' => 1, 'key' => 'mazzo-1', 'label' => 'Mazzo 1', 'description' => 'Orizzontale 4/3', 'enabled' => true),
+            ),
+        );
+    }
+
+    $manifest = $decoded;
+    return $manifest;
+}
+
+function scrivania_get_deck_definitions() {
+    $manifest = scrivania_get_decks_manifest();
+    $decks = array();
+
+    foreach ($manifest['decks'] as $deck) {
+        if (!is_array($deck) || !isset($deck['id']) || (isset($deck['enabled']) && !$deck['enabled'])) {
+            continue;
+        }
+
+        $id = intval($deck['id']);
+        $deck['id'] = $id;
+        $decks[$id] = $deck;
+    }
+
+    ksort($decks, SORT_NUMERIC);
+    return $decks;
+}
+
+function scrivania_get_default_deck_id() {
+    $manifest = scrivania_get_decks_manifest();
+    $default_id = isset($manifest['defaultDeckId']) ? intval($manifest['defaultDeckId']) : 0;
+    $decks = scrivania_get_deck_definitions();
+
+    return isset($decks[$default_id]) ? $default_id : intval(array_key_first($decks));
+}
+
+function scrivania_parse_deck_id($value) {
+    if (is_array($value) || is_object($value) || $value === '') {
+        return null;
+    }
+
+    $validated = filter_var($value, FILTER_VALIDATE_INT);
+    return $validated === false ? null : intval($validated);
+}
+
+function scrivania_get_deck($value) {
+    $deck_id = scrivania_parse_deck_id($value);
+    if ($deck_id === null) {
+        return null;
+    }
+
+    $decks = scrivania_get_deck_definitions();
+    return isset($decks[$deck_id]) ? $decks[$deck_id] : null;
+}
+
+function scrivania_normalize_deck_id($value) {
+    $deck = scrivania_get_deck($value);
+    return is_array($deck) ? intval($deck['id']) : scrivania_get_default_deck_id();
+}
+
+function scrivania_get_deck_options() {
+    $options = array();
+
+    foreach (scrivania_get_deck_definitions() as $deck) {
+        $id = intval($deck['id']);
+        $preview_name = isset($deck['previewImageName']) ? ltrim((string) $deck['previewImageName'], '/') : '';
+        $options[] = array(
+            'id' => $id,
+            'key' => isset($deck['key']) ? sanitize_key($deck['key']) : 'mazzo-' . $id,
+            'label' => isset($deck['label']) ? sanitize_text_field($deck['label']) : 'Mazzo ' . $id,
+            'description' => isset($deck['description']) ? sanitize_text_field($deck['description']) : '',
+            'preview_url' => $preview_name !== ''
+                ? plugins_url('js/app/assets/mazzo_' . $id . '/' . $preview_name, SCRIVANIA_PLUGIN_FILE)
+                : '',
+        );
+    }
+
+    return $options;
+}
+
+/**
+ * Autorizzazione centralizzata per la creazione di sessioni Scrivania.
+ */
+function scrivania_user_can_create_session($user_id = 0) {
+    $user_id = $user_id > 0 ? intval($user_id) : get_current_user_id();
+    if ($user_id <= 0) {
+        return false;
+    }
+
+    if (user_can($user_id, 'manage_options')) {
+        return true;
+    }
+
+    if (function_exists('ipt_get_user_access_tier')) {
+        return in_array(ipt_get_user_access_tier($user_id), array('welcome', 'professional', 'gold', 'admin'), true);
+    }
+
+    if (function_exists('pmpro_hasMembershipLevel')) {
+        return (bool) pmpro_hasMembershipLevel(array(3, 4, 5), $user_id);
+    }
+
+    return false;
+}
 
 // Make sure all required directories exist
 function scrivania_check_directories() {

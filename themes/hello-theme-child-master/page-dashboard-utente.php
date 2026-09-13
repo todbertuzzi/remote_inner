@@ -279,12 +279,17 @@ get_header(); ?>
 </main>
 
 <?php
-$scrivania_deck_options = function_exists('gim_get_scrivania_deck_options')
-    ? gim_get_scrivania_deck_options()
+$scrivania_deck_options = function_exists('scrivania_get_deck_options')
+    ? scrivania_get_deck_options()
+    : (function_exists('gim_get_scrivania_deck_options')
+        ? gim_get_scrivania_deck_options()
     : array(
-        array('id' => 0, 'label' => 'Mazzo 0 (verticale)'),
-        array('id' => 1, 'label' => 'Mazzo 1 (orizzontale 4/3)'),
-    );
+        array('id' => 0, 'label' => 'Mazzo 0', 'description' => 'Verticale', 'preview_url' => ''),
+        array('id' => 1, 'label' => 'Mazzo 1', 'description' => 'Orizzontale 4/3', 'preview_url' => ''),
+    ));
+$scrivania_initial_deck = !empty($scrivania_deck_options)
+    ? reset($scrivania_deck_options)
+    : array('id' => '', 'label' => '', 'description' => '', 'preview_url' => '');
 ?>
 
 <!-- Modale per invito ai Giochi  -->
@@ -306,12 +311,37 @@ $scrivania_deck_options = function_exists('gim_get_scrivania_deck_options')
     <div id="scrivaniaContattiList">
         <p>Caricamento contatti...</p>
     </div>
-    <label class="dashboard-modal-label dashboard-modal-label--first" for="scrivania_mazzo">Mazzo:</label>
-    <select id="scrivania_mazzo" class="dashboard-modal-field">
-        <?php foreach ($scrivania_deck_options as $deck_option) : ?>
-            <option value="<?php echo esc_attr($deck_option['id']); ?>"><?php echo esc_html($deck_option['label']); ?></option>
-        <?php endforeach; ?>
-    </select>
+    <div class="scrivania-deck-picker">
+        <label class="dashboard-modal-label" for="scrivania_mazzo">Scegli il mazzo</label>
+        <select
+            id="scrivania_mazzo"
+            class="dashboard-modal-field scrivania-deck-select"
+            aria-describedby="scrivaniaDeckPreview"
+        >
+            <?php foreach ($scrivania_deck_options as $deck_option) : ?>
+                <option
+                    value="<?php echo esc_attr($deck_option['id']); ?>"
+                    data-label="<?php echo esc_attr($deck_option['label']); ?>"
+                    data-description="<?php echo esc_attr($deck_option['description'] ?? ''); ?>"
+                    data-preview-url="<?php echo esc_url($deck_option['preview_url'] ?? ''); ?>"
+                ><?php echo esc_html($deck_option['label']); ?></option>
+            <?php endforeach; ?>
+        </select>
+
+        <div id="scrivaniaDeckPreview" class="scrivania-deck-preview" aria-live="polite">
+            <img
+                id="scrivaniaDeckPreviewImage"
+                class="scrivania-deck-preview-image"
+                src="<?php echo esc_url($scrivania_initial_deck['preview_url'] ?? ''); ?>"
+                alt="<?php echo esc_attr(!empty($scrivania_initial_deck['label']) ? 'Anteprima ' . $scrivania_initial_deck['label'] : ''); ?>"
+                <?php echo empty($scrivania_initial_deck['preview_url']) ? 'hidden' : ''; ?>
+            >
+            <div class="scrivania-deck-preview-copy">
+                <strong id="scrivaniaDeckPreviewLabel"><?php echo esc_html($scrivania_initial_deck['label'] ?? ''); ?></strong>
+                <span id="scrivaniaDeckPreviewDescription"><?php echo esc_html($scrivania_initial_deck['description'] ?? ''); ?></span>
+            </div>
+        </div>
+    </div>
     <label class="dashboard-modal-label" for="data_scrivania">Data:</label>
     <input type="date" id="data_scrivania" class="dashboard-modal-field">
     <label class="dashboard-modal-label" for="ora_scrivania">Orario:</label>
@@ -326,6 +356,7 @@ $scrivania_deck_options = function_exists('gim_get_scrivania_deck_options')
 <script type="text/javascript">
     var ajaxurl = "<?php echo admin_url('admin-ajax.php'); ?>";
     var scrivaniaDashboardInvitesNonce = "<?php echo esc_js(wp_create_nonce('scrivania_dashboard_invites')); ?>";
+    var scrivaniaCreateSessionNonce = "<?php echo esc_js(wp_create_nonce('scrivania_create_session')); ?>";
     var rubricaContattiNonce = "<?php echo esc_js(wp_create_nonce('rubrica_contatti')); ?>";
     var gameInviteNonce = "<?php echo esc_js(wp_create_nonce('ipt_game_invite')); ?>";
 </script>
@@ -378,9 +409,28 @@ $scrivania_deck_options = function_exists('gim_get_scrivania_deck_options')
             }, function(data) {
                 $('#scrivaniaContattiList').html(data);
                 $('#scrivaniaInviteResponse').html('');
+                updateScrivaniaDeckPreview();
                 $('#scrivaniaInviteModal, #modalBackdrop').prop('hidden', false);
             });
         }
+
+        function updateScrivaniaDeckPreview() {
+            const $option = $('#scrivania_mazzo option:selected');
+            const previewUrl = String($option.attr('data-preview-url') || '');
+            const label = String($option.attr('data-label') || $option.text() || '');
+            const description = String($option.attr('data-description') || '');
+            const $image = $('#scrivaniaDeckPreviewImage');
+
+            $('#scrivaniaDeckPreviewLabel').text(label);
+            $('#scrivaniaDeckPreviewDescription').text(description);
+            $image
+                .attr('src', previewUrl)
+                .attr('alt', previewUrl ? 'Anteprima ' + label : '')
+                .prop('hidden', !previewUrl);
+        }
+
+        $('#scrivania_mazzo').on('change', updateScrivaniaDeckPreview);
+        updateScrivaniaDeckPreview();
 
         function caricaRubrica() {
             $.post(ajaxurl, {
@@ -500,12 +550,13 @@ $scrivania_deck_options = function_exists('gim_get_scrivania_deck_options')
             let data = $('#data_scrivania').val();
             let ora = $('#ora_scrivania').val();
             let mazzoId = $('#scrivania_mazzo').val();
-            if (emails.length === 0 || !data || !ora) {
-                $('#scrivaniaInviteResponse').html('<div class="dashboard-feedback dashboard-feedback--error">Seleziona almeno un contatto e inserisci data e orario.</div>');
+            if (emails.length === 0 || !data || !ora || mazzoId === null || mazzoId === '') {
+                $('#scrivaniaInviteResponse').html('<div class="dashboard-feedback dashboard-feedback--error">Seleziona almeno un contatto, un mazzo, la data e l’orario.</div>');
                 return;
             }
             $.post(ajaxurl, {
                 action: 'attiva_scrivania',
+                nonce: scrivaniaCreateSessionNonce,
                 email_destinatario: emails.join(','),
                 data_invito: data,
                 ora_invito: ora,

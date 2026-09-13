@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "defaultDeckId": 0,
+  "decks": [
+    {
+      "id": 0,
+      "key": "mazzo-0",
+      "label": "Carte New Vision",
+      "description": "Verticale",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/NewVisionGameToolKit_image_1.jpg",
+      "cardImagePattern": "NewVisionGameToolKit_image_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "portrait",
+        "aspectRatio": "2 / 3",
+        "aspectRatioValue": 0.6666666667,
+        "frameWidth": 96,
+        "trayWidth": 80,
+        "imageFit": "cover"
+      }
+    },
+    {
+      "id": 1,
+      "key": "mazzo-1",
+      "label": "Foto New Vision",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    },
+    {
+      "id": 3,
+      "key": "mazzo-3",
+      "label": "Porte",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    },
+    {
+      "id": 4,
+      "key": "mazzo-4",
+      "label": "Draghi",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    },
+    {
+      "id": 5,
+      "key": "mazzo-5",
+      "label": "Consapevolezza e Responsabilità",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    },
+    {
+      "id": 6,
+      "key": "mazzo-6",
+      "label": "Emozioni",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    },
+    {
+      "id": 7,
+      "key": "mazzo-7",
+      "label": "Foto-Ispirazioni",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    },
+    {
+      "id": 8,
+      "key": "mazzo-8",
+      "label": "Viaggio dell’eroe",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    }
+    ,
+    {
+      "id": 9,
+      "key": "mazzo-9",
+      "label": "Miti e leggende",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    }
+    ,
+    {
+      "id": 10,
+      "key": "mazzo-10",
+      "label": "Scale e Labirinti",
+      "description": "Orizzontale 4/3",
+      "enabled": true,
+      "frontImageName": "card_front.jpg",
+      "previewImageName": "cards/kit_photo_1.jpg",
+      "cardImagePattern": "kit_photo_{n}.jpg",
+      "cardCount": 20,
+      "layout": {
+        "orientation": "landscape",
+        "aspectRatio": "4 / 3",
+        "aspectRatioValue": 1.3333333333,
+        "frameWidth": 160,
+        "trayWidth": 112,
+        "imageFit": "cover"
+      }
+    }
+  ]
+}

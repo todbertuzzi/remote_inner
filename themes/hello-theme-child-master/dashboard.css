@@ -170,6 +170,10 @@
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
 }
 
+#scrivaniaInviteModal {
+    width: min(560px, calc(100% - 32px));
+}
+
 .dashboard-modal-label {
     display: block;
 }
@@ -182,6 +186,84 @@
     display: block;
     width: 100%;
     margin-bottom: 10px;
+}
+
+.scrivania-deck-picker {
+    display: grid;
+    gap: 8px;
+    margin: 18px 0;
+}
+
+.scrivania-deck-picker > .dashboard-modal-label {
+    font-weight: 700;
+}
+
+.scrivania-deck-select {
+    min-height: 46px;
+    margin: 0;
+    padding: 8px 38px 8px 12px;
+    border: 1px solid #cfd6df;
+    border-radius: 8px;
+    background-color: #fff;
+    color: #183858;
+    font: inherit;
+}
+
+.scrivania-deck-select:focus {
+    border-color: #183858;
+    outline: 2px solid rgba(24, 56, 88, 0.18);
+    outline-offset: 1px;
+}
+
+.scrivania-deck-preview {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    min-height: 64px;
+    padding: 6px 8px;
+    border: 1px solid #dde3ea;
+    border-radius: 10px;
+    background: #f7f9fb;
+}
+
+#scrivaniaDeckPreviewImage {
+    display: block;
+    width: 56px !important;
+    min-width: 56px !important;
+    max-width: 56px !important;
+    height: 48px !important;
+    min-height: 48px !important;
+    max-height: 48px !important;
+    margin: 0;
+    border-radius: 6px;
+    object-fit: cover !important;
+    object-position: center;
+}
+
+#scrivaniaDeckPreviewImage[hidden] {
+    display: none;
+}
+
+.scrivania-deck-preview-copy {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+#scrivaniaDeckPreview {
+    width: 100%;
+    max-width: 350px;
+    overflow: hidden;
+}
+
+.scrivania-deck-preview-copy strong {
+    color: #183858;
+}
+
+.scrivania-deck-preview-copy > span {
+    color: #626b79;
+    font-size: 0.875rem;
 }
 
 .dashboard-modal-response {
@@ -199,5 +281,18 @@
     .rubrica-contact-item {
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .scrivania-deck-preview {
+        grid-template-columns: 48px minmax(0, 1fr);
+    }
+
+    #scrivaniaDeckPreviewImage {
+        width: 48px !important;
+        min-width: 48px !important;
+        max-width: 48px !important;
+        height: 42px !important;
+        min-height: 42px !important;
+        max-height: 42px !important;
     }
 }

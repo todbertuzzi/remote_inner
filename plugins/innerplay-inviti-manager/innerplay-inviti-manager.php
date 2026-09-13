@@ -342,15 +342,23 @@ function gim_format_scrivania_schedule_html($data, $ora) {
 
 if (!function_exists('gim_get_scrivania_deck_options')) {
     function gim_get_scrivania_deck_options() {
+        if (function_exists('scrivania_get_deck_options')) {
+            return scrivania_get_deck_options();
+        }
+
         return array(
-            array('id' => 0, 'label' => 'Mazzo 0 (verticale)'),
-            array('id' => 1, 'label' => 'Mazzo 1 (orizzontale 4/3)'),
+            array('id' => 0, 'label' => 'Mazzo 0', 'description' => 'Verticale', 'preview_url' => ''),
+            array('id' => 1, 'label' => 'Mazzo 1', 'description' => 'Orizzontale 4/3', 'preview_url' => ''),
         );
     }
 }
 
 if (!function_exists('gim_normalize_scrivania_deck_id')) {
     function gim_normalize_scrivania_deck_id($value) {
+        if (function_exists('scrivania_normalize_deck_id')) {
+            return scrivania_normalize_deck_id($value);
+        }
+
         $deck_id = intval($value);
         $valid_ids = array();
 
@@ -483,7 +491,24 @@ function gim_attiva_scrivania() {
     if (!is_user_logged_in()) {
         wp_send_json_error('Utente non loggato.');
     }
+    if (!check_ajax_referer('scrivania_create_session', 'nonce', false)) {
+        echo '<div class="dashboard-feedback dashboard-feedback--error">Richiesta non valida o scaduta. Ricarica la pagina e riprova.</div>';
+        wp_die();
+    }
+
     $user_id = get_current_user_id();
+    $can_create = user_can($user_id, 'manage_options');
+    if (function_exists('scrivania_user_can_create_session')) {
+        $can_create = scrivania_user_can_create_session($user_id);
+    } elseif (function_exists('ipt_get_user_access_tier')) {
+        $can_create = in_array(ipt_get_user_access_tier($user_id), array('welcome', 'professional', 'gold', 'admin'), true);
+    } elseif (function_exists('pmpro_hasMembershipLevel')) {
+        $can_create = (bool) pmpro_hasMembershipLevel(array(3, 4, 5), $user_id);
+    }
+    if (!$can_create) {
+        echo '<div class="dashboard-feedback dashboard-feedback--error">Il tuo piano non consente di creare sessioni Scrivania.</div>';
+        wp_die();
+    }
 
     $raw_emails = $_POST['email_destinatario'] ?? [];
     if (is_string($raw_emails)) {
@@ -493,7 +518,23 @@ function gim_attiva_scrivania() {
     }
     $data = sanitize_text_field($_POST['data_invito'] ?? '');
     $ora = sanitize_text_field($_POST['ora_invito'] ?? '');
-    $deck_id = gim_normalize_scrivania_deck_id($_POST['mazzo_id'] ?? 0);
+    $raw_deck_id = isset($_POST['mazzo_id']) ? wp_unslash($_POST['mazzo_id']) : '';
+    $valid_deck = function_exists('scrivania_get_deck') ? is_array(scrivania_get_deck($raw_deck_id)) : false;
+    if (!function_exists('scrivania_get_deck')) {
+        $valid_deck = false;
+        $parsed_deck_id = filter_var($raw_deck_id, FILTER_VALIDATE_INT);
+        foreach (gim_get_scrivania_deck_options() as $option) {
+            if ($parsed_deck_id !== false && intval($option['id'] ?? -1) === intval($parsed_deck_id)) {
+                $valid_deck = true;
+                break;
+            }
+        }
+    }
+    if (!$valid_deck) {
+        echo '<div class="dashboard-feedback dashboard-feedback--error">Il mazzo selezionato non è valido.</div>';
+        wp_die();
+    }
+    $deck_id = gim_normalize_scrivania_deck_id($raw_deck_id);
 
     if (!is_array($emails) || !$data || !$ora) {
         echo '<div style="color:red;">Dati mancanti o non validi.</div>';

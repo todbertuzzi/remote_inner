@@ -290,7 +290,13 @@ class Scrivania_Collaborativa_API
             'methods' => 'POST',
             'callback' => array($this, 'create_session'),
             'permission_callback' => function () {
-                return is_user_logged_in();
+                if (!is_user_logged_in()) {
+                    return new WP_Error('auth_required', 'Autenticazione richiesta.', array('status' => 401));
+                }
+
+                return function_exists('scrivania_user_can_create_session') && scrivania_user_can_create_session()
+                    ? true
+                    : new WP_Error('membership_required', 'Il tuo piano non consente di creare sessioni Scrivania.', array('status' => 403));
             }
         ));
     }
@@ -413,6 +419,85 @@ class Scrivania_Collaborativa_API
         return array($role, $permissions);
     }
 
+    private function get_effective_deck_id($session_settings, $stored_cards) {
+        $stored_deck_id = function_exists('scrivania_normalize_deck_id')
+            ? scrivania_normalize_deck_id($session_settings['mazzoId'] ?? 0)
+            : intval($session_settings['mazzoId'] ?? 0);
+
+        // Compatibilità con le sessioni create quando mazzoId non veniva salvato correttamente.
+        if ($stored_deck_id === 0 && is_array($stored_cards)) {
+            foreach ($stored_cards as $card) {
+                if (!is_array($card) || !isset($card['mazzoId'])) {
+                    continue;
+                }
+
+                $card_deck = function_exists('scrivania_get_deck') ? scrivania_get_deck($card['mazzoId']) : null;
+                if (is_array($card_deck) && intval($card_deck['id']) > 0) {
+                    return intval($card_deck['id']);
+                }
+            }
+        }
+
+        return $stored_deck_id;
+    }
+
+    private function normalize_snapshot_cards($cards, $deck_id) {
+        if (!is_array($cards)) {
+            return new WP_Error('invalid_cards', 'Lo stato delle carte non è valido.', array('status' => 400));
+        }
+        if (count($cards) > 200) {
+            return new WP_Error('too_many_cards', 'La sessione contiene troppe carte.', array('status' => 400));
+        }
+
+        $normalized = array();
+        $seen_ids = array();
+        foreach ($cards as $card) {
+            if (!is_array($card)) {
+                return new WP_Error('invalid_card', 'Una carta della sessione non è valida.', array('status' => 400));
+            }
+
+            $card_id = sanitize_text_field((string) ($card['id'] ?? ''));
+            $template_id = sanitize_key((string) ($card['templateId'] ?? preg_replace('/-.*/', '', $card_id)));
+            if ($card_id === '' || $template_id === '' || isset($seen_ids[$card_id])) {
+                return new WP_Error('invalid_card_identity', 'Identificativo carta non valido o duplicato.', array('status' => 400));
+            }
+            $seen_ids[$card_id] = true;
+
+            $normalized[] = array(
+                'id' => $card_id,
+                'templateId' => $template_id,
+                'mazzoId' => intval($deck_id),
+                'nome' => sanitize_text_field((string) ($card['nome'] ?? 'Carta')),
+                'img' => esc_url_raw((string) ($card['img'] ?? '')),
+                'frontImg' => esc_url_raw((string) ($card['frontImg'] ?? '')),
+                'retro' => esc_url_raw((string) ($card['retro'] ?? ($card['img'] ?? ''))),
+                'x' => max(-100000, min(100000, floatval($card['x'] ?? 100))),
+                'y' => max(-100000, min(100000, floatval($card['y'] ?? 100))),
+                'angle' => fmod(360 + fmod(floatval($card['angle'] ?? 0), 360), 360),
+                'scale' => max(0.5, min(3.0, floatval($card['scale'] ?? 1))),
+                'isFront' => !empty($card['isFront']),
+            );
+        }
+
+        return $normalized;
+    }
+
+    private function editor_preserves_card_set($stored_cards, $next_cards) {
+        $identity_map = static function ($cards) {
+            $map = array();
+            foreach ($cards as $card) {
+                if (!is_array($card) || empty($card['id'])) {
+                    continue;
+                }
+                $map[(string) $card['id']] = sanitize_key((string) ($card['templateId'] ?? preg_replace('/-.*/', '', (string) $card['id'])));
+            }
+            ksort($map);
+            return $map;
+        };
+
+        return $identity_map($stored_cards) === $identity_map($next_cards);
+    }
+
     /**
      * Ottiene i dati di sessione in base al token
      *
@@ -503,7 +588,7 @@ class Scrivania_Collaborativa_API
         if (!is_array($sessione)) {
             $sessione = array();
         }
-        $carte = $params['carte'] ?? array();
+        $carte = $params['carte'] ?? null;
 
         if (!$session_id) {
             return new WP_Error('session_id_missing', 'ID sessione mancante', array('status' => 400));
@@ -527,7 +612,27 @@ class Scrivania_Collaborativa_API
             $stored_sessione = array();
         }
 
+        $stored_cards = !empty($session->carte) ? json_decode($session->carte, true) : array();
+        if (!is_array($stored_cards)) {
+            $stored_cards = array();
+        }
+        if ($carte === null) {
+            $carte = $stored_cards;
+        }
+
+        $effective_deck_id = $this->get_effective_deck_id($stored_sessione, $stored_cards);
+        if (array_key_exists('mazzoId', $sessione)) {
+            $requested_deck = function_exists('scrivania_parse_deck_id')
+                ? scrivania_parse_deck_id($sessione['mazzoId'])
+                : intval($sessione['mazzoId']);
+            if ($requested_deck === null || intval($requested_deck) !== intval($effective_deck_id)) {
+                return new WP_Error('deck_immutable', 'Il mazzo non può essere modificato dopo la creazione della sessione.', array('status' => 409));
+            }
+            unset($sessione['mazzoId']);
+        }
+
         $sessione = array_merge($stored_sessione, $sessione);
+        $sessione['mazzoId'] = intval($effective_deck_id);
 
         // V1: supporto snapshot unico. Aggiorna solo i campi di plancia preservando le altre impostazioni.
         if (isset($params['snapshot']) && is_array($params['snapshot'])) {
@@ -564,6 +669,15 @@ class Scrivania_Collaborativa_API
         if (!$can_write) {
             return new WP_Error('not_authorized', 'Non sei autorizzato a modificare questa sessione', array('status' => 403));
         }
+
+        $normalized_cards = $this->normalize_snapshot_cards($carte, $effective_deck_id);
+        if (is_wp_error($normalized_cards)) {
+            return $normalized_cards;
+        }
+        if ($role === 'editor' && !$this->editor_preserves_card_set($stored_cards, $normalized_cards)) {
+            return new WP_Error('spawn_not_allowed', 'Solo il creatore può aggiungere o rimuovere carte.', array('status' => 403));
+        }
+        $carte = $normalized_cards;
 
         // Versioning
         $current_version = property_exists($session, 'state_version') ? intval($session->state_version) : 1;
@@ -833,50 +947,30 @@ class Scrivania_Collaborativa_API
         $params = $request->get_params();
         $nome = sanitize_text_field($params['nome'] ?? 'Nuova Sessione');
         $raw_deck_id = $params['mazzo_id'] ?? ($params['mazzoId'] ?? 0);
-        if (function_exists('gim_normalize_scrivania_deck_id')) {
-            $deck_id = gim_normalize_scrivania_deck_id($raw_deck_id);
-        } else {
-            $deck_id = intval($raw_deck_id);
-            if (!in_array($deck_id, array(0, 1), true)) {
-                $deck_id = 0;
-            }
+        $deck = function_exists('scrivania_get_deck') ? scrivania_get_deck($raw_deck_id) : null;
+        if (!is_array($deck)) {
+            return new WP_Error('invalid_deck', 'Il mazzo selezionato non è valido.', array('status' => 400));
         }
+        $deck_id = intval($deck['id']);
 
         $user_id = get_current_user_id();
 
-        // Genera un token unico
-        $token = wp_generate_password(24, false);
-
-        // Impostazioni iniziali
-        $impostazioni = array(
-            'attiva' => false,
-            'iniziata' => null,
-            'mazzoId' => $deck_id,
-            'sfondo' => null
-        );
-
-        global $wpdb;
-        $table = $wpdb->prefix . 'scrivania_sessioni';
-
-        // Inserisci la nuova sessione
-        $result = $wpdb->insert(
-            $table,
-            array(
-                'token' => $token,
-                'creatore_id' => $user_id,
-                'nome' => $nome,
-                'impostazioni' => wp_json_encode($impostazioni),
-                'creato_il' => current_time('mysql'),
-                'modificato_il' => current_time('mysql')
-            ),
-            array('%s', '%d', '%s', '%s', '%s', '%s')
-        );
-
-        if (!$result) {
-            return new WP_Error('db_error', 'Errore nella creazione della sessione', array('status' => 500));
+        if (!class_exists('Scrivania_Ajax')) {
+            return new WP_Error('session_service_unavailable', 'Servizio di creazione sessione non disponibile.', array('status' => 503));
         }
 
-        $session_id = $wpdb->insert_id;
+        $session_result = Scrivania_Ajax::create_session_for_user($user_id, $deck_id);
+        if (is_wp_error($session_result)) {
+            return $session_result;
+        }
+
+        $session_id = intval($session_result);
+        global $wpdb;
+        $table = $wpdb->prefix . 'scrivania_sessioni';
+        if ($nome !== '') {
+            $wpdb->update($table, array('nome' => $nome), array('id' => $session_id), array('%s'), array('%d'));
+        }
+        $token = (string) $wpdb->get_var($wpdb->prepare("SELECT token FROM {$table} WHERE id = %d", $session_id));
 
         return array(
             'success' => true,

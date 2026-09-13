@@ -119,3 +119,16 @@ La pagina richiede comunque il login e imposta automaticamente intestazioni anti
 - utenti senza piano e senza inviti: pagina dei livelli PMPro.
 
 I link diretti contenuti nelle email di invito hanno sempre la precedenza sul redirect predefinito. Anche un abbonato può aprire `I miei inviti` dal menu quando ha ricevuto inviti. Dopo la pubblicazione della nuova pagina, la vecchia pagina basata sul template `page-gestione-inviti.php` viene reindirizzata alla dashboard Elementor.
+
+
+Gestione dei mazzi della Scrivania
+
+Il catalogo sorgente dei mazzi si trova nel progetto React `scrivania-app/src/data/decks.json`. Il comando `npm run build:wp`, eseguito dalla cartella `scrivania-app`, valida le immagini, compila React e sincronizza nel plugin questo file:
+
+`plugins/scrivania-collaborativa-api/config/decks.json`
+
+La dashboard WordPress e l'app React derivano quindi le opzioni dalla stessa configurazione. Il mazzo viene scelto durante la creazione della sessione e salvato in `impostazioni.mazzoId`; non è modificabile in seguito.
+
+La creazione della sessione è protetta sia via AJAX sia via REST con autenticazione e controllo del piano. Sono ammessi amministratori e utenti Welcome, Professional o Gold. L'ID del mazzo deve corrispondere a una voce attiva del catalogo. Solo il creatore può aggiungere o rimuovere carte; gli editor invitati possono modificare le carte già presenti.
+
+Per aggiungere un mazzo non serve modificare il markup della dashboard o il codice PHP: si aggiungono gli asset `public/assets/mazzo_ID`, la voce nel catalogo React e si esegue `npm run build:wp`. Gli ID dei mazzi già pubblicati non devono essere riutilizzati o cambiati.

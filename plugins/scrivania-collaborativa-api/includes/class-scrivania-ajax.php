@@ -186,6 +186,10 @@ class Scrivania_Ajax {
     }
 
     private static function normalize_deck_id($value) {
+        if (function_exists('scrivania_normalize_deck_id')) {
+            return scrivania_normalize_deck_id($value);
+        }
+
         $deck_id = intval($value);
         $valid_ids = array();
 
@@ -196,6 +200,74 @@ class Scrivania_Ajax {
         }
 
         return in_array($deck_id, $valid_ids, true) ? $deck_id : 0;
+    }
+
+    private static function is_valid_deck_id($value) {
+        if (function_exists('scrivania_get_deck')) {
+            return is_array(scrivania_get_deck($value));
+        }
+
+        $parsed = filter_var($value, FILTER_VALIDATE_INT);
+        if ($parsed === false) {
+            return false;
+        }
+
+        foreach (self::get_scrivania_deck_options() as $option) {
+            if (isset($option['id']) && intval($option['id']) === intval($parsed)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function user_is_welcome($user_id) {
+        if (function_exists('ipt_get_user_access_tier')) {
+            return ipt_get_user_access_tier($user_id) === 'welcome';
+        }
+
+        if (function_exists('pmpro_hasMembershipLevel')) {
+            return (bool) pmpro_hasMembershipLevel(3, $user_id);
+        }
+
+        return false;
+    }
+
+    /**
+     * Unico punto di creazione/reset delle sessioni, condiviso da AJAX e REST.
+     * Ritorna l'ID sessione oppure WP_Error.
+     */
+    public static function create_session_for_user($user_id, $deck_id) {
+        $user_id = intval($user_id);
+        if ($user_id <= 0 || !function_exists('scrivania_user_can_create_session') || !scrivania_user_can_create_session($user_id)) {
+            return new WP_Error('membership_required', 'Il tuo piano non consente di creare sessioni Scrivania.', array('status' => 403));
+        }
+
+        if (!self::is_valid_deck_id($deck_id)) {
+            return new WP_Error('invalid_deck', 'Il mazzo selezionato non è valido.', array('status' => 400));
+        }
+
+        $deck_id = self::normalize_deck_id($deck_id);
+
+        if (self::user_is_welcome($user_id)) {
+            $existing_session_id = self::get_latest_session_id_for_creator($user_id);
+            if ($existing_session_id > 0) {
+                self::reset_session_state($existing_session_id, $deck_id);
+                self::revoke_invites_for_session($existing_session_id);
+                return intval($existing_session_id);
+            }
+        }
+
+        $session_id = self::create_new_session($user_id, $deck_id);
+        if ($session_id <= 0) {
+            return new WP_Error('session_create_failed', 'Errore nella creazione della sessione.', array('status' => 500));
+        }
+
+        if (!self::user_is_welcome($user_id)) {
+            self::archive_previous_sessions_for_creator($user_id, $session_id);
+        }
+
+        return intval($session_id);
     }
 
     private static function send_scrivania_invite_email($email, $token, $data, $ora) {
@@ -694,6 +766,11 @@ class Scrivania_Ajax {
             return;
         }
 
+        if (!check_ajax_referer('scrivania_create_session', 'nonce', false)) {
+            echo '<div class="dashboard-feedback dashboard-feedback--error">Richiesta non valida o scaduta. Ricarica la pagina e riprova.</div>';
+            wp_die();
+        }
+
         global $wpdb;
 
         $user_id = get_current_user_id();
@@ -705,7 +782,12 @@ class Scrivania_Ajax {
         }
         $data = isset($_POST['data_invito']) ? sanitize_text_field($_POST['data_invito']) : '';
         $ora = isset($_POST['ora_invito']) ? sanitize_text_field($_POST['ora_invito']) : '';
-        $deck_id = self::normalize_deck_id($_POST['mazzo_id'] ?? 0);
+        $raw_deck_id = isset($_POST['mazzo_id']) ? wp_unslash($_POST['mazzo_id']) : '';
+        if (!self::is_valid_deck_id($raw_deck_id)) {
+            echo '<div class="dashboard-feedback dashboard-feedback--error">Il mazzo selezionato non è valido.</div>';
+            wp_die();
+        }
+        $deck_id = self::normalize_deck_id($raw_deck_id);
 
         if (empty($emails) || empty($data) || empty($ora)) {
             echo '<div style="color:red;">Dati mancanti o non validi.</div>';
@@ -727,54 +809,12 @@ class Scrivania_Ajax {
             wp_die();
         }
 
-        // Strategia sessione:
-        // - Welcome: riusa la sessione esistente, ma resetta stato + revoca inviti precedenti ad ogni nuovo batch.
-        // - Non-Welcome: crea sempre una nuova sessione e archivia/chiude le precedenti (revocando i relativi inviti).
-        $is_welcome = false;
-        if (function_exists('pmpro_getMembershipLevelForUser')) {
-            $membership = pmpro_getMembershipLevelForUser($user_id);
-            if ($membership && strtolower((string) $membership->name) === 'welcome') {
-                $is_welcome = true;
-            }
-        }
-
-        $session_id = 0;
-
-        if ($is_welcome) {
-            $existing_session_id = self::get_latest_session_id_for_creator($user_id);
-
-            if (!empty($existing_session_id)) {
-                $session_id = (int) $existing_session_id;
-                // Welcome: reset sessione e revoca tutti gli inviti precedenti.
-                self::reset_session_state($session_id, $deck_id);
-                self::revoke_invites_for_session($session_id);
-            } else {
-                // Welcome: può creare la prima e unica sessione.
-                // Difensivo: se per qualche motivo esistono già sessioni (schema inconsistente), blocca.
-                $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
-                $sessioni = (int) $wpdb->get_var($wpdb->prepare(
-                    "SELECT COUNT(*) FROM {$table_sessions} WHERE creatore_id = %d",
-                    $user_id
-                ));
-                if ($sessioni >= 1) {
-                    echo '<div style="color:red;">Gli utenti Welcome possono creare massimo 1 sessione. Upgrade il tuo piano per creare più sessioni.</div>';
-                    wp_die();
-                }
-
-                $session_id = (int) self::create_new_session($user_id, $deck_id);
-            }
-        } else {
-            // Non-Welcome: nuova sessione sempre
-            $session_id = (int) self::create_new_session($user_id, $deck_id);
-            if (!empty($session_id)) {
-                self::archive_previous_sessions_for_creator($user_id, $session_id);
-            }
-        }
-
-        if (!$session_id) {
-            echo '<div style="color:red;">Errore nella creazione della sessione.</div>';
+        $session_result = self::create_session_for_user($user_id, $deck_id);
+        if (is_wp_error($session_result)) {
+            echo '<div class="dashboard-feedback dashboard-feedback--error">' . esc_html($session_result->get_error_message()) . '</div>';
             wp_die();
         }
+        $session_id = intval($session_result);
 
         // Link diretto per l'invitante (token sessione)
         $session_link = '';
