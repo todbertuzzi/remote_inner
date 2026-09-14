@@ -13,13 +13,14 @@ Di seguito la versione operativa.
 Ruoli stanza
 
 admin: creatore sessione (scrivania_sessioni.creatore_id)
-editor: può move/rotate/scale/flip, non può spawn
+editor: può move/rotate/scale/flip e spawn dal mazzo della sessione; può anche rimuovere carte
 viewer: read-only
 Permessi derivati (client)
 
 canRead: admin/editor/viewer
 canWrite: admin/editor
-canSpawn: solo admin
+canSpawn: admin/editor
+canRemove: admin/editor
 canManageMembers: solo admin
 Identificatori
 
@@ -49,13 +50,11 @@ Permessi: canWrite (editor+admin)
 Concorrenza: se base_version !== current_version → 409 { current_version }
 Side-effect: trigger Pusher state-updated
 Implementazione: plugin (affianca o sostituisce logica di save_session_data)
-Spawn carta (admin-only)
-POST /wp-json/scrivania/v1/session/{session_id}/spawn
-Input: { base_version, card_template_id, initial }
-Output: { session_id, state_version, spawned_card_id }
-Permessi: canSpawn (solo admin)
+Aggiunta carta (admin/editor)
+Usa POST /wp-json/scrivania/v1/session/{session_id}/snapshot con la nuova carta nello snapshot.
+Permessi: canSpawn (admin/editor). Anche la rimozione delle carte è consentita agli editor; viewer e utenti revocati non possono salvare modifiche.
 Side-effect: persiste snapshot e trigger state-updated
-Implementazione: plugin
+Implementazione: save_session_data nel plugin; non esiste una route spawn separata.
 Claim invito (consume)
 POST /wp-json/scrivania/v1/invites/claim
 Input: { invite_token }
@@ -107,7 +106,7 @@ Realtime: ascolta state-updated e refetcha snapshot (coalesced).
 Gating UI:
 
 admin: spawn abilitato
-editor: drag/rotate/scale/flip
+editor: barra mazzo, spawn/remove, drag/rotate/scale/flip
 viewer: tutto disabilitato
 Implementazione:
 

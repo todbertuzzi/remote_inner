@@ -129,6 +129,8 @@ Il catalogo sorgente dei mazzi si trova nel progetto React `scrivania-app/src/da
 
 La dashboard WordPress e l'app React derivano quindi le opzioni dalla stessa configurazione. Il mazzo viene scelto durante la creazione della sessione e salvato in `impostazioni.mazzoId`; non è modificabile in seguito.
 
-La creazione della sessione è protetta sia via AJAX sia via REST con autenticazione e controllo del piano. Sono ammessi amministratori e utenti Welcome, Professional o Gold. L'ID del mazzo deve corrispondere a una voce attiva del catalogo. Solo il creatore può aggiungere o rimuovere carte; gli editor invitati possono modificare le carte già presenti.
+La creazione della sessione è protetta sia via AJAX sia via REST con autenticazione e controllo del piano. Sono ammessi amministratori e utenti Welcome, Professional o Gold. L'ID del mazzo deve corrispondere a una voce attiva del catalogo. Il creatore e gli editor invitati possono vedere il mazzo della sessione, aggiungere carte e modificarle. Gli editor possono anche rimuovere carte; la gestione dei partecipanti resta riservata al creatore. Il ritorno al ruolo viewer nasconde il mazzo e disabilita le modifiche in tempo reale.
 
 Per aggiungere un mazzo non serve modificare il markup della dashboard o il codice PHP: si aggiungono gli asset `public/assets/mazzo_ID`, la voce nel catalogo React e si esegue `npm run build:wp`. Gli ID dei mazzi già pubblicati non devono essere riutilizzati o cambiati.
+
+Il test dei permessi si esegue dalla radice di questo repository con `php plugins/scrivania-collaborativa-api/tests/editor-permissions.php`. Richiama gli handler reali dell'API usando sostituti locali di WordPress e del database: verifica aggiunta e salvataggio per gli editor, blocco per viewer e revocati, rimozione consentita a creatore ed editor, mazzo immutabile e conflitti di versione. La verifica finale con due account WordPress e Pusher va eseguita nell'ambiente integrato.

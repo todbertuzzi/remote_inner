@@ -412,7 +412,8 @@ class Scrivania_Collaborativa_API
         $permissions = array(
             'canRead' => in_array($role, array('admin', 'editor', 'viewer'), true),
             'canWrite' => in_array($role, array('admin', 'editor'), true),
-            'canSpawn' => ($role === 'admin'),
+            'canSpawn' => in_array($role, array('admin', 'editor'), true),
+            'canRemove' => in_array($role, array('admin', 'editor'), true),
             'canManageMembers' => ($role === 'admin'),
         );
 
@@ -480,22 +481,6 @@ class Scrivania_Collaborativa_API
         }
 
         return $normalized;
-    }
-
-    private function editor_preserves_card_set($stored_cards, $next_cards) {
-        $identity_map = static function ($cards) {
-            $map = array();
-            foreach ($cards as $card) {
-                if (!is_array($card) || empty($card['id'])) {
-                    continue;
-                }
-                $map[(string) $card['id']] = sanitize_key((string) ($card['templateId'] ?? preg_replace('/-.*/', '', (string) $card['id'])));
-            }
-            ksort($map);
-            return $map;
-        };
-
-        return $identity_map($stored_cards) === $identity_map($next_cards);
     }
 
     /**
@@ -673,9 +658,6 @@ class Scrivania_Collaborativa_API
         $normalized_cards = $this->normalize_snapshot_cards($carte, $effective_deck_id);
         if (is_wp_error($normalized_cards)) {
             return $normalized_cards;
-        }
-        if ($role === 'editor' && !$this->editor_preserves_card_set($stored_cards, $normalized_cards)) {
-            return new WP_Error('spawn_not_allowed', 'Solo il creatore può aggiungere o rimuovere carte.', array('status' => 403));
         }
         $carte = $normalized_cards;
 
