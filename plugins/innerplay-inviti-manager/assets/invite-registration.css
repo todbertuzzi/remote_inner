@@ -1,0 +1,16 @@
+.gim-invite-account { padding: 48px 24px; }
+.gim-invite-account .gim-invite-account-card { max-width: 620px; margin: 0 auto; padding: 32px; background: #fff; border: 1px solid #d8e2ec; border-radius: 16px; }
+.gim-invite-account .gim-invite-eyebrow { color: #026a8f; font-size: 14px; font-weight: 700; }
+.gim-invite-account h1 { font-size: clamp(26px, 4vw, 36px); line-height: 1.2; margin: 12px 0 20px; }
+.gim-invite-account p { margin: 0 0 20px; }
+.gim-invite-account label { display: block; margin-bottom: 8px; }
+.gim-invite-account input:not([type="hidden"]):not([type="checkbox"]):not([type="submit"]) { box-sizing: border-box; width: 100%; min-width: 0; padding: 12px; border: 1px solid #9baebb; border-radius: 8px; font-size: 16px; }
+.gim-invite-account input[readonly] { background: #f3f6f8; }
+.gim-invite-account .gim-invite-help { font-size: 14px; color: #526778; }
+.gim-invite-account .gim-invite-account-error { padding: 12px; background: #fff1ed; color: #8d3024; border-radius: 8px; }
+.gim-invite-account button[type="submit"], .gim-invite-account input[type="submit"] { width: 100%; white-space: normal; padding: 14px 20px; border-radius: 10px; }
+.gim-invite-account :is(a, button, input):focus-visible { outline: 3px solid #026a8f; outline-offset: 3px; }
+@media (max-width: 600px) {
+    .gim-invite-account { padding: 24px 16px; }
+    .gim-invite-account .gim-invite-account-card { padding: 24px 20px; }
+}

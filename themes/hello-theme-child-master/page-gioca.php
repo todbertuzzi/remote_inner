@@ -1,19 +1,12 @@
 <?php
 /* Template Name: Gioca */
 
-if (!is_user_logged_in()) {
-    wp_redirect(wp_login_url(add_query_arg(null, null)));
-    exit;
+// Gestisce login e registrazione da invito senza scegliere un piano.
+$invito_uuid = isset($_GET['invito']) && is_string($_GET['invito']) ? sanitize_text_field(wp_unslash($_GET['invito'])) : '';
+if (!function_exists('gim_require_invited_account')) {
+    wp_die('Registrazione invitati non disponibile. Aggiorna il plugin Inviti Manager.', 'Servizio non disponibile', array('response' => 503));
 }
-
-$invito_uuid = isset($_GET['invito']) ? sanitize_text_field($_GET['invito']) : '';
-if (!$invito_uuid) {
-    status_header(400);
-    get_header();
-    echo '<h2>Invito mancante</h2>';
-    get_footer();
-    exit;
-}
+gim_require_invited_account('game', $invito_uuid);
 
 // Verifica sessione e permessi
 global $wpdb;
@@ -42,6 +35,7 @@ if (is_wp_error($access_result)) {
     status_header($status);
     get_header();
     echo '<h2>' . esc_html($access_result->get_error_message()) . '</h2>';
+    echo '<p><a href="' . esc_url(wp_logout_url(add_query_arg('invito', $invito_uuid, home_url('/gioca/')))) . '">Esci e accedi con l’account invitato</a></p>';
     get_footer();
     exit;
 }

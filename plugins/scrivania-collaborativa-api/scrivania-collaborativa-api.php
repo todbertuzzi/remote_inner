@@ -118,7 +118,7 @@ function scrivania_get_deck_options() {
 }
 
 /**
- * Autorizzazione centralizzata per la creazione di sessioni Scrivania.
+ * Autorizzazione per creare e gestire le proprie sessioni Scrivania.
  */
 function scrivania_user_can_create_session($user_id = 0) {
     $user_id = $user_id > 0 ? intval($user_id) : get_current_user_id();
@@ -131,11 +131,11 @@ function scrivania_user_can_create_session($user_id = 0) {
     }
 
     if (function_exists('ipt_get_user_access_tier')) {
-        return in_array(ipt_get_user_access_tier($user_id), array('welcome', 'professional', 'gold', 'admin'), true);
+        return in_array(ipt_get_user_access_tier($user_id), array('professional', 'gold', 'admin'), true);
     }
 
     if (function_exists('pmpro_hasMembershipLevel')) {
-        return (bool) pmpro_hasMembershipLevel(array(3, 4, 5), $user_id);
+        return (bool) pmpro_hasMembershipLevel(array(4, 5), $user_id);
     }
 
     return false;

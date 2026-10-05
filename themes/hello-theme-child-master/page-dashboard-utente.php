@@ -57,6 +57,9 @@ if ((empty($membership_level) || $user_access_tier === '') && !current_user_can(
     exit;
 }
 
+$can_manage_scrivania = function_exists('scrivania_user_can_create_session')
+    && scrivania_user_can_create_session($current_user->ID);
+
 $allowed_content_tiers = function_exists('ipt_get_allowed_access_tiers')
     ? ipt_get_allowed_access_tiers($current_user->ID)
     : array();
@@ -150,7 +153,9 @@ get_header(); ?>
         <div class="pmpro-membership-tabs" role="tablist" aria-label="Gestione Abbonamento">
             <button type="button" class="active" role="tab" data-tab-target="attivita" aria-selected="true" onclick="toggleTab('attivita')">📄 Attività</button>
             <button type="button" role="tab" data-tab-target="rubrica-contatti" aria-selected="false" onclick="toggleTab('rubrica-contatti')">📄 Rubrica Contatti</button>
+            <?php if ($can_manage_scrivania): ?>
             <button type="button" role="tab" data-tab-target="gestione-inviti" aria-selected="false" onclick="toggleTab('gestione-inviti')">📄 Gestione inviti</button>
+            <?php endif; ?>
             <button type="button" role="tab" data-tab-target="membership-info" aria-selected="false" onclick="toggleTab('membership-info')">📄 Dettagli Abbonamento</button>
             <button type="button" role="tab" data-tab-target="invoice-history" aria-selected="false" onclick="toggleTab('invoice-history')">💳 Storico Pagamenti</button>
             <button type="button" role="tab" data-tab-target="change-level" aria-selected="false" onclick="toggleTab('change-level')">🔁 Cambia Piano</button>
@@ -170,6 +175,15 @@ get_header(); ?>
                             </div>
 
                             <div class="dashboard-content-actions">
+                                <form class="dashboard-game-preview-form" action="<?php echo esc_url(get_permalink($gioco['id'])); ?>" method="get">
+                                    <button
+                                        type="submit"
+                                        class="dashboard-content-invite dashboard-content-preview"
+                                        aria-label="<?php echo esc_attr('Anteprima: ' . $gioco['title']); ?>"
+                                    >
+                                        Anteprima
+                                    </button>
+                                </form>
                                 <button
                                     type="button"
                                     class="dashboard-content-invite open-invite-modal"
@@ -209,13 +223,18 @@ get_header(); ?>
                 <p>Non ci sono corsi disponibili.</p>
             <?php endif; ?>
 
+            <?php if ($can_manage_scrivania): ?>
             <h3>Tool Scrivania</h3>
             <a href="/tool-scrivania">Vai alla Scrivania</a>
             <button id="openScrivaniaModal">Invita al Tool</button>
 
+            <?php endif; ?>
+
             <?php if (in_array($user_access_tier, array('gold', 'admin'), true)): ?>
-                <h3>🎁 Contenuti Extra (solo Gold)</h3>
-                <p>Accesso a contenuti esclusivi in arrivo...</p>
+                <h3>Contenuti Extra (solo Gold)</h3>
+                <a href="/area-gold/" class="dashboard-content-link">
+                    Vai ai contenuti extra
+                </a>
             <?php endif; ?>
         </div>
 
@@ -234,6 +253,7 @@ get_header(); ?>
             </div>
         </div>
 
+        <?php if ($can_manage_scrivania): ?>
         <div id="gestione-inviti" class="pmpro-tab-content" role="tabpanel" aria-hidden="true" hidden>
             <h3>Gestione Inviti (Scrivania)</h3>
 
@@ -255,6 +275,8 @@ get_header(); ?>
                 <p>Caricamento inviti...</p>
             </div>
         </div>
+
+        <?php endif; ?>
 
         <div id="membership-info" class="pmpro-tab-content" role="tabpanel" aria-hidden="true" hidden>
             <h3>Dettagli Attuali</h3>
@@ -292,64 +314,107 @@ $scrivania_initial_deck = !empty($scrivania_deck_options)
     : array('id' => '', 'label' => '', 'description' => '', 'preview_url' => '');
 ?>
 
-<!-- Modale per invito ai Giochi  -->
-<div id="inviteModal" class="dashboard-modal" hidden>
-    <h3 id="modalGiocoTitle"></h3>
-    <p>Seleziona il contatto da invitare:</p>
-    <div id="contattiModalList">
-        <p>Caricamento contatti...</p>
-    </div>
-    <input type="hidden" id="modalGiocoId">
-    <button id="sendInvites">Invia invito</button>
-    <button id="closeModal">Chiudi</button>
-    <div id="inviteResponse" class="dashboard-modal-response" aria-live="polite"></div>
-</div>
-
-<!-- Modale per invito al Tool Scrivania -->
-<div id="scrivaniaInviteModal" class="dashboard-modal" hidden>
-    <h3>Invita al Tool Scrivania</h3>
-    <div id="scrivaniaContattiList">
-        <p>Caricamento contatti...</p>
-    </div>
-    <div class="scrivania-deck-picker">
-        <label class="dashboard-modal-label" for="scrivania_mazzo">Scegli il mazzo</label>
-        <select
-            id="scrivania_mazzo"
-            class="dashboard-modal-field scrivania-deck-select"
-            aria-describedby="scrivaniaDeckPreview"
-        >
-            <?php foreach ($scrivania_deck_options as $deck_option) : ?>
-                <option
-                    value="<?php echo esc_attr($deck_option['id']); ?>"
-                    data-label="<?php echo esc_attr($deck_option['label']); ?>"
-                    data-description="<?php echo esc_attr($deck_option['description'] ?? ''); ?>"
-                    data-preview-url="<?php echo esc_url($deck_option['preview_url'] ?? ''); ?>"
-                ><?php echo esc_html($deck_option['label']); ?></option>
-            <?php endforeach; ?>
-        </select>
-
-        <div id="scrivaniaDeckPreview" class="scrivania-deck-preview" aria-live="polite">
-            <img
-                id="scrivaniaDeckPreviewImage"
-                class="scrivania-deck-preview-image"
-                src="<?php echo esc_url($scrivania_initial_deck['preview_url'] ?? ''); ?>"
-                alt="<?php echo esc_attr(!empty($scrivania_initial_deck['label']) ? 'Anteprima ' . $scrivania_initial_deck['label'] : ''); ?>"
-                <?php echo empty($scrivania_initial_deck['preview_url']) ? 'hidden' : ''; ?>
-            >
-            <div class="scrivania-deck-preview-copy">
-                <strong id="scrivaniaDeckPreviewLabel"><?php echo esc_html($scrivania_initial_deck['label'] ?? ''); ?></strong>
-                <span id="scrivaniaDeckPreviewDescription"><?php echo esc_html($scrivania_initial_deck['description'] ?? ''); ?></span>
+<section id="inviteModal" class="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="inviteModalTitle" data-invite-kind="game" hidden>
+    <header class="invite-header">
+        <div><p class="invite-eyebrow">Giochi</p><h2 id="inviteModalTitle" tabindex="-1">Invita al gioco</h2>
+        <p class="invite-subtitle" id="modalGiocoTitle"></p></div>
+        <button type="button" class="invite-close" data-invite-close aria-label="Chiudi la finestra">×</button>
+    </header>
+    <div class="invite-body">
+        <form id="gameInviteForm" class="invite-form" novalidate>
+            <div class="invite-contacts">
+                <div class="invite-section-heading"><label for="inviteModalSearch">Partecipante</label><span class="invite-count" aria-live="polite">0 selezionati</span></div>
+                <p class="invite-hint">Seleziona un contatto dalla rubrica.</p>
+                <input id="inviteModalSearch" class="invite-search" type="search" placeholder="Cerca nome o email" autocomplete="off" aria-controls="contattiModalList">
+                <div id="contattiModalList" class="invite-contact-list" role="group" aria-label="Contatti da invitare" aria-describedby="inviteModalContactsError"><p>Caricamento contatti…</p></div>
+                <p class="invite-no-results" hidden>Nessun contatto corrisponde alla ricerca.</p>
+                <p id="inviteModalContactsError" class="invite-field-error"></p>
             </div>
-        </div>
+            <div class="invite-settings"><input type="hidden" id="modalGiocoId"></div>
+        </form>
+        <div class="invite-error" role="alert" hidden></div>
+        <div class="invite-result" hidden></div>
     </div>
-    <label class="dashboard-modal-label" for="data_scrivania">Data:</label>
-    <input type="date" id="data_scrivania" class="dashboard-modal-field">
-    <label class="dashboard-modal-label" for="ora_scrivania">Orario:</label>
-    <input type="time" id="ora_scrivania" class="dashboard-modal-field">
-    <button id="sendScrivaniaInvites">Invia inviti</button>
-    <button id="closeScrivaniaModal">Chiudi</button>
-    <div id="scrivaniaInviteResponse" class="dashboard-modal-response" aria-live="polite"></div>
-</div>
+    <footer class="invite-footer">
+        <span class="invite-footer-note">Il contatto riceverà il link via email.</span>
+        <button type="button" class="invite-secondary" data-invite-close>Annulla</button>
+        <button type="submit" class="invite-primary" form="gameInviteForm" data-invite-submit disabled>Invia invito</button>
+    </footer>
+</section>
+
+<?php if ($can_manage_scrivania): ?>
+<section id="scrivaniaInviteModal" class="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="scrivaniaInviteModalTitle" data-invite-kind="scrivania" hidden>
+    <header class="invite-header">
+        <div><p class="invite-eyebrow">Tool carte</p><h2 id="scrivaniaInviteModalTitle" tabindex="-1">Invita alla Scrivania</h2>
+        <p class="invite-subtitle">Scegli chi partecipa e prepara la sessione.</p></div>
+        <button type="button" class="invite-close" data-invite-close aria-label="Chiudi la finestra">×</button>
+    </header>
+    <div class="invite-body">
+        <form id="scrivaniaInviteForm" class="invite-form invite-form--columns" novalidate>
+            <div class="invite-contacts">
+                <div class="invite-section-heading"><label for="scrivaniaInviteModalSearch">Partecipanti</label><span class="invite-count" aria-live="polite">0 selezionati</span></div>
+                <p class="invite-hint">Seleziona uno o più contatti.</p>
+                <input id="scrivaniaInviteModalSearch" class="invite-search" type="search" placeholder="Cerca nome o email" autocomplete="off" aria-controls="scrivaniaContattiList">
+                <div id="scrivaniaContattiList" class="invite-contact-list" role="group" aria-label="Contatti da invitare" aria-describedby="scrivaniaInviteModalContactsError"><p>Caricamento contatti…</p></div>
+                <p class="invite-no-results" hidden>Nessun contatto corrisponde alla ricerca.</p>
+                <p id="scrivaniaInviteModalContactsError" class="invite-field-error"></p>
+            </div>
+            <div class="invite-settings">
+                <div class="scrivania-deck-picker">
+                    <label class="dashboard-modal-label" for="scrivania_mazzo">Scegli il mazzo</label>
+                    <select
+                        id="scrivania_mazzo"
+                        class="dashboard-modal-field scrivania-deck-select"
+                        aria-describedby="scrivaniaDeckPreview"
+                    >
+                        <?php foreach ($scrivania_deck_options as $deck_option) : ?>
+                            <option
+                                value="<?php echo esc_attr($deck_option['id']); ?>"
+                                data-label="<?php echo esc_attr($deck_option['label']); ?>"
+                                data-description="<?php echo esc_attr($deck_option['description'] ?? ''); ?>"
+                                data-preview-url="<?php echo esc_url($deck_option['preview_url'] ?? ''); ?>"
+                            ><?php echo esc_html($deck_option['label']); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+
+                    <div id="scrivaniaDeckPreview" class="scrivania-deck-preview" aria-live="polite">
+                        <img
+                            id="scrivaniaDeckPreviewImage"
+                            class="scrivania-deck-preview-image"
+                            src="<?php echo esc_url($scrivania_initial_deck['preview_url'] ?? ''); ?>"
+                            alt="<?php echo esc_attr(!empty($scrivania_initial_deck['label']) ? 'Anteprima ' . $scrivania_initial_deck['label'] : ''); ?>"
+                            <?php echo empty($scrivania_initial_deck['preview_url']) ? 'hidden' : ''; ?>
+                        >
+                        <div class="scrivania-deck-preview-copy">
+                            <strong id="scrivaniaDeckPreviewLabel"><?php echo esc_html($scrivania_initial_deck['label'] ?? ''); ?></strong>
+                            <span id="scrivaniaDeckPreviewDescription"><?php echo esc_html($scrivania_initial_deck['description'] ?? ''); ?></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="invite-schedule">
+                    <div>
+                        <label for="data_scrivania">Data</label>
+                        <input type="date" id="data_scrivania" required aria-describedby="data_scrivania_error">
+                        <span class="invite-field-error" id="data_scrivania_error"></span>
+                    </div>
+                    <div>
+                        <label for="ora_scrivania">Ora</label>
+                        <input type="time" id="ora_scrivania" required aria-describedby="ora_scrivania_error">
+                        <span class="invite-field-error" id="ora_scrivania_error"></span>
+                    </div>
+                </div>
+            </div>
+        </form>
+        <div class="invite-error" role="alert" hidden></div>
+        <div class="invite-result" hidden></div>
+    </div>
+    <footer class="invite-footer">
+        <span class="invite-footer-note">Gli invitati riceveranno un link personale.</span>
+        <button type="button" class="invite-secondary" data-invite-close>Annulla</button>
+        <button type="submit" class="invite-primary" form="scrivaniaInviteForm" data-invite-submit disabled>Invia invito</button>
+    </footer>
+</section>
+<?php endif; ?>
 <div id="modalBackdrop" class="dashboard-modal-backdrop" hidden></div>
 
 
@@ -362,7 +427,7 @@ $scrivania_initial_deck = !empty($scrivania_deck_options)
 </script>
 
 <script>
-    function toggleTab(id) {
+    function toggleTab(id, sessionId) {
         const tabs = document.querySelectorAll('.pmpro-tab-content');
         const buttons = document.querySelectorAll('.pmpro-membership-tabs [data-tab-target]');
 
@@ -379,7 +444,7 @@ $scrivania_initial_deck = !empty($scrivania_deck_options)
         });
 
         if (id === 'gestione-inviti' && typeof window.scrivaniaDashboardLoadInvites === 'function') {
-            window.scrivaniaDashboardLoadInvites();
+            window.scrivaniaDashboardLoadInvites(sessionId);
         }
 
         if (id === 'rubrica-contatti' && typeof window.dashboardCaricaRubrica === 'function') {
@@ -401,36 +466,6 @@ $scrivania_initial_deck = !empty($scrivania_deck_options)
             const messageType = allowedTypes.includes(type) ? type : 'info';
             $('#scrivaniaInvitesMsg').html('<div class="dashboard-feedback dashboard-feedback--' + messageType + '">' + html + '</div>');
         }
-
-        function openScrivaniaInviteModal() {
-            $.post(ajaxurl, {
-                action: 'carica_contatti_utente',
-                modal: true
-            }, function(data) {
-                $('#scrivaniaContattiList').html(data);
-                $('#scrivaniaInviteResponse').html('');
-                updateScrivaniaDeckPreview();
-                $('#scrivaniaInviteModal, #modalBackdrop').prop('hidden', false);
-            });
-        }
-
-        function updateScrivaniaDeckPreview() {
-            const $option = $('#scrivania_mazzo option:selected');
-            const previewUrl = String($option.attr('data-preview-url') || '');
-            const label = String($option.attr('data-label') || $option.text() || '');
-            const description = String($option.attr('data-description') || '');
-            const $image = $('#scrivaniaDeckPreviewImage');
-
-            $('#scrivaniaDeckPreviewLabel').text(label);
-            $('#scrivaniaDeckPreviewDescription').text(description);
-            $image
-                .attr('src', previewUrl)
-                .attr('alt', previewUrl ? 'Anteprima ' + label : '')
-                .prop('hidden', !previewUrl);
-        }
-
-        $('#scrivania_mazzo').on('change', updateScrivaniaDeckPreview);
-        updateScrivaniaDeckPreview();
 
         function caricaRubrica() {
             $.post(ajaxurl, {
@@ -522,52 +557,6 @@ $scrivania_initial_deck = !empty($scrivania_deck_options)
                 $('#rubrica_msg').html('<div class="rubrica-feedback dashboard-feedback dashboard-feedback--error" data-status="error">Errore di rete durante l\'eliminazione. Riprova.</div>');
             }).always(function() {
                 $button.prop('disabled', false);
-            });
-        });
-
-        function caricaContattiPerModale() {
-            $.post(ajaxurl, {
-                action: 'carica_contatti_utente',
-                modal: true,
-                single_select: true
-            }, function(data) {
-                $('#contattiModalList').html(data);
-            });
-        }
-
-            $('#openScrivaniaModal').on('click', openScrivaniaInviteModal);
-            $('#openScrivaniaModalFromInvites').on('click', openScrivaniaInviteModal);
-
-        $('#closeScrivaniaModal, #modalBackdrop').on('click', function() {
-            $('#scrivaniaInviteModal, #modalBackdrop').prop('hidden', true);
-        });
-
-        $('#sendScrivaniaInvites').on('click', function() {
-            let emails = [];
-            $('input[name="contatto_modal_check[]"]:checked').each(function() {
-                emails.push($(this).val());
-            });
-            let data = $('#data_scrivania').val();
-            let ora = $('#ora_scrivania').val();
-            let mazzoId = $('#scrivania_mazzo').val();
-            if (emails.length === 0 || !data || !ora || mazzoId === null || mazzoId === '') {
-                $('#scrivaniaInviteResponse').html('<div class="dashboard-feedback dashboard-feedback--error">Seleziona almeno un contatto, un mazzo, la data e l’orario.</div>');
-                return;
-            }
-            $.post(ajaxurl, {
-                action: 'attiva_scrivania',
-                nonce: scrivaniaCreateSessionNonce,
-                email_destinatario: emails.join(','),
-                data_invito: data,
-                ora_invito: ora,
-                mazzo_id: mazzoId
-            }, function(response) {
-                $('#scrivaniaInviteResponse').html(response);
-
-                // Aggiorna la tab gestione-inviti se è aperta
-                if ($('#gestione-inviti').is(':visible') && typeof window.scrivaniaDashboardLoadInvites === 'function') {
-                    window.scrivaniaDashboardLoadInvites($('#scrivaniaSessionSelect').val());
-                }
             });
         });
 
@@ -694,6 +683,7 @@ $scrivania_initial_deck = !empty($scrivania_deck_options)
         }
 
         function loadScrivaniaInvites(sessionId) {
+            if (!document.getElementById('scrivaniaInvitesTableWrap')) return;
             setScrivaniaInvitesMsg('', '');
             $('#scrivaniaInvitesTableWrap').html('<p>Caricamento inviti...</p>');
 
@@ -797,41 +787,7 @@ $scrivania_initial_deck = !empty($scrivania_deck_options)
             });
         });
 
-        $('.open-invite-modal').on('click', function() {
-            let giocoId = $(this).data('gioco-id');
-            let giocoTitle = $(this).data('gioco-title');
-            $('#modalGiocoId').val(giocoId);
-            $('#modalGiocoTitle').text("Invita a: " + giocoTitle);
-            $('#inviteResponse').html('');
-            caricaContattiPerModale();
-            $('#inviteModal, #modalBackdrop').prop('hidden', false);
-        });
 
-        $('#closeModal, #modalBackdrop').on('click', function() {
-            $('#inviteModal, #modalBackdrop').prop('hidden', true);
-        });
-
-        $('#sendInvites').on('click', function() {
-            let giocoId = $('#modalGiocoId').val();
-            let invitedEmail = $('input[name="contatto_modal_single"]:checked').val() || '';
-            if (!invitedEmail) {
-                $('#inviteResponse').html('<div class="dashboard-feedback dashboard-feedback--error">Seleziona un contatto.</div>');
-                return;
-            }
-            $.post(ajaxurl, {
-                action: 'attiva_gioco',
-                nonce: gameInviteNonce,
-                gioco_id: giocoId,
-                email_destinatario: invitedEmail
-            }, function(response) {
-                $('#inviteResponse').html(response);
-            }).fail(function(xhr) {
-                const response = xhr && xhr.responseText
-                    ? xhr.responseText
-                    : '<div class="dashboard-feedback dashboard-feedback--error">Impossibile creare l\'invito.</div>';
-                $('#inviteResponse').html(response);
-            });
-        });
 
 
     });

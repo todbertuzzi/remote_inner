@@ -391,7 +391,7 @@ class Scrivania_Collaborativa_API
         }
 
         if (intval($session['creatore_id']) === intval($user_id)) {
-            return true;
+            return function_exists('scrivania_user_can_create_session') && scrivania_user_can_create_session($user_id);
         }
 
         $invite_row = $this->get_invite_row_for_user($session_id, $user_id, $user_email);
@@ -516,6 +516,9 @@ class Scrivania_Collaborativa_API
 
         // Membership: creator oppure invitato verificato e non revocato
         $is_admin = intval($session['creatore_id']) === $user_id;
+        if ($is_admin && (!function_exists('scrivania_user_can_create_session') || !scrivania_user_can_create_session($user_id))) {
+            return new WP_Error('membership_required', 'La gestione della Scrivania richiede un piano Professional o Gold.', array('status' => 403));
+        }
         $invite_row = null;
         if (!$is_admin) {
             $invite_row = $this->get_invite_row_for_user($session['id'], $user_id, $user_data ? $user_data->user_email : '');
@@ -638,6 +641,9 @@ class Scrivania_Collaborativa_API
 
         $user_data = get_userdata($user_id);
         $is_admin = (intval($session->creatore_id) === $user_id);
+        if ($is_admin && (!function_exists('scrivania_user_can_create_session') || !scrivania_user_can_create_session($user_id))) {
+            return new WP_Error('membership_required', 'La gestione della Scrivania richiede un piano Professional o Gold.', array('status' => 403));
+        }
         $invite_role = 'viewer';
         if (!$is_admin) {
             $invite_row = $this->get_invite_row_for_user($session_id, $user_id, $user_data ? $user_data->user_email : '');
@@ -803,7 +809,9 @@ class Scrivania_Collaborativa_API
         }
 
         $current_user_id = get_current_user_id();
-        if (intval($session['creatore_id']) !== intval($current_user_id)) {
+        if (intval($session['creatore_id']) !== intval($current_user_id)
+            || !function_exists('scrivania_user_can_create_session')
+            || !scrivania_user_can_create_session($current_user_id)) {
             return new WP_Error('not_authorized', 'Solo l\'admin può gestire i permessi', array('status' => 403));
         }
 
@@ -867,7 +875,9 @@ class Scrivania_Collaborativa_API
         }
 
         $current_user_id = get_current_user_id();
-        if (intval($session['creatore_id']) !== intval($current_user_id)) {
+        if (intval($session['creatore_id']) !== intval($current_user_id)
+            || !function_exists('scrivania_user_can_create_session')
+            || !scrivania_user_can_create_session($current_user_id)) {
             return new WP_Error('not_authorized', 'Solo l\'admin può vedere i permessi dei membri', array('status' => 403));
         }
 

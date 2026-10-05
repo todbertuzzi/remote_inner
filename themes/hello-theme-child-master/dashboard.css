@@ -1,4 +1,23 @@
 /* Dashboard utente */
+.dashboard-games .dashboard-content-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.dashboard-game-preview-form {
+    display: inline-flex;
+    margin: 0;
+}
+
+/* Override Elementor's invite-only sizing for both game actions. */
+body .dashboard-games .dashboard-content-actions button.dashboard-content-invite {
+    padding: 10px 20px;
+    margin: 0;
+    border-radius: 10px;
+}
+
 [hidden] {
     display: none !important;
 }
@@ -156,143 +175,146 @@
     color: #666;
 }
 
-.dashboard-modal {
+/* Invite dialogs share an explicit type scale, independent of page headings. */
+body.invite-dialog-open { overflow: hidden; }
+.dashboard-modal[data-invite-kind] {
+    --invite-ink: #183858;
+    --invite-accent: #087e91;
     position: fixed;
-    top: 10%;
-    left: 50%;
-    z-index: 1000;
-    width: min(400px, calc(100% - 32px));
-    max-height: 80vh;
-    overflow-y: auto;
-    padding: 20px;
-    transform: translateX(-50%);
-    background: #fff;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
-}
-
-#scrivaniaInviteModal {
-    width: min(560px, calc(100% - 32px));
-}
-
-.dashboard-modal-label {
-    display: block;
-}
-
-.dashboard-modal-label--first {
-    margin-top: 12px;
-}
-
-.dashboard-modal-field {
-    display: block;
-    width: 100%;
-    margin-bottom: 10px;
-}
-
-.scrivania-deck-picker {
-    display: grid;
-    gap: 8px;
-    margin: 18px 0;
-}
-
-.scrivania-deck-picker > .dashboard-modal-label {
-    font-weight: 700;
-}
-
-.scrivania-deck-select {
-    min-height: 46px;
+    inset: 50% auto auto 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    width: min(520px, calc(100% - 32px));
+    max-height: min(800px, calc(100dvh - 48px));
     margin: 0;
-    padding: 8px 38px 8px 12px;
-    border: 1px solid #cfd6df;
-    border-radius: 8px;
-    background-color: #fff;
-    color: #183858;
-    font: inherit;
-}
-
-.scrivania-deck-select:focus {
-    border-color: #183858;
-    outline: 2px solid rgba(24, 56, 88, 0.18);
-    outline-offset: 1px;
-}
-
-.scrivania-deck-preview {
-    display: grid;
-    grid-template-columns: 56px minmax(0, 1fr);
-    align-items: center;
-    gap: 10px;
-    min-height: 64px;
-    padding: 6px 8px;
-    border: 1px solid #dde3ea;
-    border-radius: 10px;
-    background: #f7f9fb;
-}
-
-#scrivaniaDeckPreviewImage {
-    display: block;
-    width: 56px !important;
-    min-width: 56px !important;
-    max-width: 56px !important;
-    height: 48px !important;
-    min-height: 48px !important;
-    max-height: 48px !important;
-    margin: 0;
-    border-radius: 6px;
-    object-fit: cover !important;
-    object-position: center;
-}
-
-#scrivaniaDeckPreviewImage[hidden] {
-    display: none;
-}
-
-.scrivania-deck-preview-copy {
-    display: grid;
-    gap: 4px;
-    min-width: 0;
-}
-
-#scrivaniaDeckPreview {
-    width: 100%;
-    max-width: 350px;
+    padding: 0;
     overflow: hidden;
+    border: 1px solid #e0e7ee;
+    border-radius: 20px;
+    background: #fff;
+    box-shadow: 0 24px 80px #102d4c33;
+    color: var(--invite-ink);
+    font-size: 16px;
+    line-height: 1.5;
+    text-align: left;
 }
-
-.scrivania-deck-preview-copy strong {
-    color: #183858;
+#scrivaniaInviteModal { width: min(820px, calc(100% - 32px)); }
+.dashboard-modal *, .dashboard-modal *::before, .dashboard-modal *::after { box-sizing: border-box; }
+.dashboard-modal p { margin: 0; }
+.dashboard-modal .invite-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 24px 28px 20px;
+    border-bottom: 1px solid #e5ebf0;
+    flex-shrink: 0;
 }
-
-.scrivania-deck-preview-copy > span {
-    color: #626b79;
-    font-size: 0.875rem;
+.dashboard-modal .invite-eyebrow { margin: 0 0 4px; color: #08788a; font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.dashboard-modal h2 { margin: 0; color: var(--invite-ink); font-family: inherit; font-size: 26px; font-weight: 700; line-height: 1.2; letter-spacing: -.02em; }
+.dashboard-modal h2:focus { outline: none; }
+.dashboard-modal .invite-subtitle { margin-top: 8px; font-size: 14px; line-height: 1.5; color: #627183; overflow-wrap: anywhere; }
+.dashboard-modal button, .dashboard-modal a.invite-primary {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 10px 16px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color .15s;
 }
-
-.dashboard-modal-response {
-    margin-top: 10px;
+.dashboard-modal .invite-primary { background: var(--invite-accent); color: #fff; }
+.dashboard-modal .invite-primary:hover { background: #066879; color: #fff; }
+.dashboard-modal .invite-secondary { background: #fff; border-color: #ccd7e1; color: var(--invite-ink); }
+.dashboard-modal .invite-secondary:hover { background: #edf4f7; color: var(--invite-ink); }
+.dashboard-modal .invite-close { flex-shrink: 0; width: 44px; padding: 0; margin: -8px -12px 0 0; background: transparent; color: #627183; font-size: 28px; font-weight: 400; }
+.dashboard-modal .invite-close:hover { background: #eef3f7; }
+.dashboard-modal button:disabled { opacity: .5; cursor: default; }
+.dashboard-modal :is(button, a, input, select):focus-visible { outline: 3px solid #087e9166; outline-offset: 3px; }
+.dashboard-modal .invite-body { min-height: 0; padding: 24px 28px; overflow-y: auto; overscroll-behavior: contain; }
+.dashboard-modal .invite-form--columns { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); gap: 28px; }
+.dashboard-modal .invite-contacts, .dashboard-modal .invite-settings { min-width: 0; }
+.dashboard-modal .invite-form--columns .invite-settings { border-left: 1px solid #e5ebf0; padding-left: 28px; }
+.dashboard-modal .invite-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dashboard-modal label { color: var(--invite-ink); font-size: 14px; font-weight: 600; }
+.dashboard-modal .invite-count { font-size: 12px; color: #496174; white-space: nowrap; }
+.dashboard-modal .invite-hint { color: #627183; font-size: 13px; line-height: 1.5; margin: 5px 0 12px; }
+.dashboard-modal input:not([type="radio"]):not([type="checkbox"]), .dashboard-modal select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    margin: 6px 0 0;
+    padding: 10px 12px;
+    border: 1px solid #ccd7e1;
+    border-radius: 9px;
+    background-color: #fff;
+    color: var(--invite-ink);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1.5;
 }
-
-.dashboard-modal-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 999;
-    background: rgba(0, 0, 0, 0.4);
-}
-
+.dashboard-modal input::placeholder { color: #6b7987; opacity: 1; }
+.dashboard-modal .invite-search { margin-bottom: 12px !important; background-color: #f6f8fa !important; }
+.dashboard-modal .invite-contact-options { max-height: 280px !important; padding: 0; margin: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.dashboard-modal .invite-contact-options li { margin: 0 0 6px !important; list-style: none; }
+.dashboard-modal .invite-contact-options label { display: flex; gap: 10px; align-items: center; min-height: 62px; padding: 9px 10px; border: 1px solid #e3e9ef; border-radius: 10px; cursor: pointer; }
+.dashboard-modal .invite-contact-options label:hover { background: #f6f9fb; }
+.dashboard-modal .invite-contact-options label:has(input:checked) { background: #eaf6f7; border-color: #087e91; }
+.dashboard-modal .invite-contact-options input { flex-shrink: 0; width: 17px; height: 17px; margin: 0; accent-color: #087e91; }
+.dashboard-modal .invite-contact-copy { display: grid; gap: 2px; min-width: 0; }
+.dashboard-modal .invite-contact-copy strong { font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.dashboard-modal .invite-contact-copy > span { font-size: 12px; font-weight: 400; color: #627183; overflow-wrap: anywhere; }
+.dashboard-modal .invite-no-results { font-size: 13px; color: #627183; padding: 12px 0; }
+.dashboard-modal .scrivania-deck-picker { display: grid; gap: 10px; margin: 0 0 20px; }
+.dashboard-modal .scrivania-deck-select { margin: 0; padding-right: 28px; }
+.dashboard-modal .scrivania-deck-preview { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border-radius: 10px; background: #f2f6fa; }
+.dashboard-modal #scrivaniaDeckPreviewImage { flex-shrink: 0; width: 48px !important; min-width: 48px !important; max-width: 48px !important; height: 48px !important; min-height: 48px !important; max-height: 48px !important; object-fit: cover !important; border-radius: 7px; margin: 0; }
+.dashboard-modal .scrivania-deck-preview-copy { display: grid; gap: 3px; min-width: 0; }
+.dashboard-modal .scrivania-deck-preview-copy strong { font-size: 14px; line-height: 1.35; color: var(--invite-ink); }
+.dashboard-modal .scrivania-deck-preview-copy > span { font-size: 12px; color: #627183; }
+.dashboard-modal .invite-schedule { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 10px; }
+.dashboard-modal .invite-schedule input { padding: 10px 6px; }
+.dashboard-modal .invite-field-error { display: block; margin-top: 5px; color: #a52b23; font-size: 12px; }
+.dashboard-modal .invite-field-error:empty { display: none; }
+.dashboard-modal [aria-invalid="true"] { border-color: #a52b23 !important; }
+.dashboard-modal .invite-error { margin-top: 16px; padding: 12px; background: #fff1ed; border: 1px solid #edc4b8; border-radius: 10px; color: #8d3024; font-size: 14px; }
+.dashboard-modal .invite-footer { display: flex; justify-content: flex-end; align-items: center; gap: 10px; flex-shrink: 0; padding: 16px 28px; border-top: 1px solid #e5ebf0; background: #f8fafc; }
+.dashboard-modal .invite-footer-note { flex: 1; font-size: 12px; color: #627183; }
+.dashboard-modal .invite-result { text-align: center; padding: 4px 0 8px; }
+.dashboard-modal .invite-success-icon { display: grid; place-items: center; width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 50%; background: #e5f5ef; color: #227452; font-size: 28px; }
+.dashboard-modal .invite-result-summary { font-size: 15px; font-weight: 600; }
+.dashboard-modal .invite-result-mail { margin-top: 16px; font-size: 16px; font-weight: 600; }
+.dashboard-modal .invite-result-recipients { max-height: 72px; overflow-y: auto; margin-top: 6px; font-size: 13px; color: #627183; overflow-wrap: anywhere; }
+.dashboard-modal .invite-result-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin: 24px 0 14px; }
+.dashboard-modal .invite-warning { text-align: left; margin-top: 18px; padding: 14px; background: #fff7e8; border: 1px solid #ead5a9; border-radius: 10px; color: #795213; font-size: 13px; overflow-wrap: anywhere; }
+.dashboard-modal .invite-warning p { margin-top: 6px; }
+.dashboard-modal .invite-warning p:first-of-type { max-height: 72px; overflow-y: auto; }
+.dashboard-modal .invite-text-button { padding: 8px; background: transparent; color: #08788a; }
+.dashboard-modal .invite-text-button:hover { background: #edf6f7; }
+.dashboard-modal .invite-copy-status { margin-top: 8px; font-size: 13px; color: #227452; }
+.dashboard-modal-backdrop { position: fixed; inset: 0; z-index: 10000; background: #10263d80; backdrop-filter: blur(3px); }
 @media (max-width: 640px) {
-    .rubrica-contact-item {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-
-    .scrivania-deck-preview {
-        grid-template-columns: 48px minmax(0, 1fr);
-    }
-
-    #scrivaniaDeckPreviewImage {
-        width: 48px !important;
-        min-width: 48px !important;
-        max-width: 48px !important;
-        height: 42px !important;
-        min-height: 42px !important;
-        max-height: 42px !important;
-    }
+    .rubrica-contact-item { flex-direction: column; align-items: flex-start; }
+    .dashboard-modal[data-invite-kind], #scrivaniaInviteModal { width: calc(100% - 20px); max-height: calc(100dvh - 24px); border-radius: 16px; }
+    .dashboard-modal .invite-header { padding: 20px; }
+    .dashboard-modal h2 { font-size: 23px; }
+    .dashboard-modal .invite-body { padding: 20px; }
+    .dashboard-modal .invite-form--columns { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+    .dashboard-modal .invite-form--columns .invite-settings { padding: 20px 0 0; border-left: 0; border-top: 1px solid #e5ebf0; }
+    .dashboard-modal .invite-contact-options { max-height: 168px !important; }
+    .dashboard-modal .invite-footer { padding: 14px 20px; flex-wrap: wrap; }
+    .dashboard-modal .invite-footer-note { flex-basis: 100%; }
+    .dashboard-modal input:not([type="radio"]):not([type="checkbox"]), .dashboard-modal select { font-size: 16px; }
+    .dashboard-modal .invite-result-actions { flex-direction: column; }
 }

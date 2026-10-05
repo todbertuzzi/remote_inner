@@ -28,7 +28,7 @@ function innerplay_register_post_type_gioco()
         'query_var'          => true,
         'rewrite'            => array('slug' => 'giochi'),
         'capability_type'    => 'post',
-        'has_archive'        => true,
+        'has_archive'        => false,
         'hierarchical'       => false,
         'menu_position'      => 20,
         'supports'           => array('title', 'editor', 'thumbnail'),

@@ -193,6 +193,69 @@ function gim_game_user_can_access_session($session, $current_user) {
     return intval($by_email) > 0;
 }
 
+/**
+ * Compatibilità per i chiamanti dell'anteprima riservata agli amministratori.
+ * Mantiene un UUID reale per il protocollo esistente di Unity e user-profile.
+ */
+function gim_get_admin_game_preview_session($game_id, $current_user) {
+    if (!($current_user instanceof WP_User) || intval($current_user->ID) <= 0
+        || !user_can($current_user, 'manage_options')) {
+        return new WP_Error('preview_forbidden', 'Anteprima riservata agli amministratori.', array('status' => 403));
+    }
+    return gim_get_game_preview_session($game_id, $current_user);
+}
+
+/**
+ * Sessione personale riutilizzabile per un'ora, senza inviti o email.
+ * Verifica i permessi anche prima di riutilizzare una sessione esistente.
+ */
+function gim_get_game_preview_session($game_id, $current_user) {
+    $game_id = intval($game_id);
+    if (!($current_user instanceof WP_User) || intval($current_user->ID) <= 0) {
+        return new WP_Error('auth_required', 'Autenticazione richiesta.', array('status' => 401));
+    }
+    if ($game_id <= 0 || get_post_type($game_id) !== 'gioco') {
+        return new WP_Error('invalid_game', 'Gioco non valido.', array('status' => 404));
+    }
+    if (!function_exists('ipt_user_can_preview_game')) {
+        return new WP_Error('access_control_unavailable', 'Controllo accessi non disponibile.', array('status' => 503));
+    }
+    if (!ipt_user_can_preview_game($current_user->ID, $game_id)) {
+        return new WP_Error('preview_forbidden', 'Il tuo piano non consente di aprire l’anteprima di questo gioco.', array('status' => 403));
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'game_sessions';
+    $user_id = intval($current_user->ID);
+    $preview_status = user_can($current_user, 'manage_options') ? 'admin_preview' : 'member_preview';
+    $session = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM {$table}
+         WHERE gioco_id = %d AND host_user_id = %d AND invited_user_id = %d
+           AND status = %s AND expires_at > %s
+         ORDER BY id DESC LIMIT 1",
+        $game_id, $user_id, $user_id, $preview_status, current_time('mysql')
+    ));
+    if ($session) {
+        return $session;
+    }
+
+    $data = array(
+        'host_user_id' => $user_id,
+        'gioco_id' => $game_id,
+        'invito_uuid' => wp_generate_uuid4(),
+        'invited_email' => sanitize_email($current_user->user_email),
+        'invited_user_id' => $user_id,
+        'status' => $preview_status,
+        'created_at' => current_time('mysql'),
+        'expires_at' => date('Y-m-d H:i:s', current_time('timestamp') + HOUR_IN_SECONDS),
+    );
+    if ($wpdb->insert($table, $data, array('%d', '%d', '%s', '%s', '%d', '%s', '%s', '%s')) === false) {
+        return new WP_Error('preview_create_failed', 'Impossibile preparare l’anteprima del gioco. Riprova.', array('status' => 500));
+    }
+    $data['id'] = intval($wpdb->insert_id);
+    return (object) $data;
+}
+
 function gim_game_bind_invited_user($session, $current_user) {
     if (!is_object($session) || !($current_user instanceof WP_User) || intval($current_user->ID) <= 0) {
         return false;
@@ -501,11 +564,12 @@ function gim_attiva_scrivania() {
     if (function_exists('scrivania_user_can_create_session')) {
         $can_create = scrivania_user_can_create_session($user_id);
     } elseif (function_exists('ipt_get_user_access_tier')) {
-        $can_create = in_array(ipt_get_user_access_tier($user_id), array('welcome', 'professional', 'gold', 'admin'), true);
+        $can_create = in_array(ipt_get_user_access_tier($user_id), array('professional', 'gold', 'admin'), true);
     } elseif (function_exists('pmpro_hasMembershipLevel')) {
-        $can_create = (bool) pmpro_hasMembershipLevel(array(3, 4, 5), $user_id);
+        $can_create = $can_create || (bool) pmpro_hasMembershipLevel(array(4, 5), $user_id);
     }
     if (!$can_create) {
+        status_header(403);
         echo '<div class="dashboard-feedback dashboard-feedback--error">Il tuo piano non consente di creare sessioni Scrivania.</div>';
         wp_die();
     }
@@ -737,13 +801,24 @@ function gim_attiva_gioco()
     ], ['%d','%s','%d','%s']);
 
     $link = add_query_arg(['invito' => $invito_uuid], home_url('/gioca'));
+    $mail_sent = false;
     if ($ok !== false) {
-        wp_mail(
+        $mail_sent = wp_mail(
             $invited_email,
             'Sei stato invitato a giocare',
             'Clicca per entrare in partita: ' . esc_url($link),
             ['Content-Type: text/plain; charset=UTF-8']
         );
+    }
+
+    if (isset($_POST['response_format']) && $_POST['response_format'] === 'json') {
+        wp_send_json_success(array(
+            'session_id' => $session_id,
+            'url' => esc_url_raw($link),
+            'sent' => $mail_sent ? 1 : 0,
+            'failed' => $mail_sent ? array() : array($invited_email),
+            'recipients' => array($invited_email),
+        ));
     }
 
     echo '<div class="dashboard-feedback dashboard-feedback--success">Partita creata per: ' . esc_html($invited_email) . '</div>';
@@ -928,11 +1003,11 @@ function cim_carica_contatti_utente()
         if (!$contatti) {
             echo '<p>Nessun contatto trovato.</p>';
         } else {
-            echo '<ul style="max-height:200px; overflow:auto; padding-left:0;">';
+            echo '<ul class="invite-contact-options" style="max-height:280px; overflow:auto; padding-left:0;">';
             foreach ($contatti as $c) {
                 echo '<li style="list-style:none; margin-bottom:6px;">';
                 echo '<label><input type="' . esc_attr($input_type) . '" name="' . esc_attr($input_name) . '" value="' . esc_attr($c->email) . '"> ';
-                echo esc_html($c->nome) . ' (' . esc_html($c->email) . ')';
+                echo '<span class="invite-contact-copy"><strong>' . esc_html($c->nome) . '</strong><span>' . esc_html($c->email) . '</span></span>';
                 echo '</label></li>';
             }
             echo '</ul>';
@@ -960,3 +1035,4 @@ function cim_carica_contatti_utente()
 }
 
 require_once plugin_dir_path(__FILE__) . 'includes/invited-dashboard.php';
+require_once plugin_dir_path(__FILE__) . 'includes/invite-registration.php';

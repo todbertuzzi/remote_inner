@@ -201,7 +201,8 @@ function gim_get_received_game_invites($user_id = 0, $limit = 100) {
         "FROM {$table_sessions} gs\n" .
         "LEFT JOIN {$wpdb->posts} p ON p.ID = gs.gioco_id AND p.post_type = 'gioco'\n" .
         "LEFT JOIN {$wpdb->users} u ON u.ID = gs.host_user_id\n" .
-        "WHERE (gs.invited_user_id = %d\n" .
+        "WHERE gs.status NOT IN ('admin_preview', 'member_preview')\n" .
+        "AND (gs.invited_user_id = %d\n" .
         "  OR ((gs.invited_user_id IS NULL OR gs.invited_user_id = 0) AND LOWER(gs.invited_email) = LOWER(%s)))\n" .
         "ORDER BY gs.id DESC\n" .
         "LIMIT {$limit}";

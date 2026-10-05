@@ -19,8 +19,6 @@ if (function_exists('nocache_headers')) {
     nocache_headers();
 }
 
-get_header();
-
 // Mantieni i redirect sullo stesso host della richiesta (evita mismatch cookie tra www/non-www).
 function scrivania_invite_build_url_on_request_host($path_with_query) {
     $scheme = is_ssl() ? 'https' : 'http';
@@ -107,6 +105,7 @@ function scrivania_invite_format_schedule_label($scheduled_at) {
 
 function scrivania_invite_render_not_active_yet($scheduled_at) {
     $when_label = scrivania_invite_format_schedule_label($scheduled_at);
+    get_header();
     echo '<div class="site-main"><div class="container" style="max-width:700px; margin:0 auto; padding:2rem;">';
     echo '<h2>Invito non ancora attivo</h2>';
     if ($when_label !== '') {
@@ -120,26 +119,17 @@ function scrivania_invite_render_not_active_yet($scheduled_at) {
     exit;
 }
 
-$token = isset($_GET['token']) ? sanitize_text_field($_GET['token']) : '';
-
-if (!$token) {
-    echo '<div class="site-main"><div class="container"><h2>Token mancante</h2></div></div>';
-    get_footer();
-    exit;
+$token = isset($_GET['token']) && is_string($_GET['token']) ? sanitize_text_field(wp_unslash($_GET['token'])) : '';
+if (!function_exists('gim_get_invite_registration_context')) {
+    wp_die('Registrazione invitati non disponibile. Aggiorna il plugin Inviti Manager.', 'Servizio non disponibile', array('response' => 503));
 }
+$registration_context = gim_get_invite_registration_context('scrivania', $token);
+if (is_wp_error($registration_context)) gim_render_invite_error($registration_context);
 
-// Recupera l'invito dal database
+// Il contesto condiviso ha già verificato token, invito e sessione.
 global $wpdb;
 $table = $wpdb->prefix . 'scrivania_invitati';
-$invito = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE token = %s", $token));
-
-$errors = new WP_Error();
-
-if (!$invito) {
-    echo '<div class="site-main"><div class="container"><h2>Invito non trovato</h2></div></div>';
-    get_footer();
-    exit;
-}
+$invito = $registration_context['invite'];
 
 $scheduled_at = scrivania_invite_parse_schedule($invito->data_invito ?? '', $invito->ora_invito ?? '');
 $now = function_exists('current_datetime')
@@ -147,17 +137,11 @@ $now = function_exists('current_datetime')
     : new DateTimeImmutable('now', scrivania_invite_get_wp_timezone());
 $invite_not_active_yet = $scheduled_at instanceof DateTimeImmutable && $scheduled_at > $now;
 
-// Revocato?
-if (!empty($invito->revoked_at) || (!empty($invito->status) && $invito->status === 'revoked')) {
-    echo '<div class="site-main"><div class="container"><h2>Invito revocato</h2><p>Questo invito non è più valido.</p></div></div>';
-    get_footer();
-    exit;
-}
-
 // Consumato?
 if (!empty($invito->consumed_at) || (!empty($invito->status) && $invito->status === 'consumed')) {
     // Se l'utente non è loggato, chiedi login.
     if (!is_user_logged_in()) {
+        get_header();
         echo '<div class="site-main"><div class="container" style="max-width:700px; margin:0 auto; padding:2rem;">';
         echo '<h2>Invito già utilizzato</h2>';
         echo '<p>Questo link invito è stato già utilizzato. Accedi con l’account invitato per entrare nella scrivania.</p>';
@@ -169,8 +153,10 @@ if (!empty($invito->consumed_at) || (!empty($invito->status) && $invito->status 
 
     // Se è loggato con l'email invitata, vai direttamente al tool.
     $current_user = wp_get_current_user();
-    if (!$current_user || strtolower($current_user->user_email) !== strtolower($invito->invitato_email)) {
+    if (!$current_user || !gim_scrivania_invite_matches_user($invito, $current_user)) {
         $logout_url = wp_logout_url(add_query_arg(null, null));
+        status_header(403);
+        get_header();
         echo '<div class="site-main"><div class="container" style="max-width:700px; margin:0 auto; padding:2rem;">';
         echo '<h2>Account errato</h2>';
         echo '<p>Sei loggato con un account diverso da quello invitato. Per continuare devi uscire e accedere con l’email invitata.</p>';
@@ -192,6 +178,7 @@ if (!empty($invito->consumed_at) || (!empty($invito->status) && $invito->status 
         exit;
     }
 
+    get_header();
     echo '<div class="site-main"><div class="container"><h2>Sessione non trovata</h2></div></div>';
     get_footer();
     exit;
@@ -218,6 +205,7 @@ if (empty($invito->verified_at)) {
         exit;
     }
 
+    get_header();
     echo '<div class="site-main"><div class="container" style="max-width:700px; margin:0 auto; padding:2rem;">';
     echo '<h2>Conferma la tua email</h2>';
     echo '<p>Per continuare devi confermare di avere accesso alla casella email invitata.</p>';
@@ -232,85 +220,15 @@ if (empty($invito->verified_at)) {
     exit;
 }
 
-// Se il form di registrazione è stato inviato manualmente
-if (!is_user_logged_in() && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['custom_register'])) {
-    $username = sanitize_user($_POST['user_login']);
-    // Email vincolata all'invito
-    $email = sanitize_email($invito->invitato_email);
-    $password = sanitize_text_field($_POST['user_pass']);
-
-    $errors = new WP_Error();
-    if (username_exists($username)) {
-        $errors->add('username', 'Questo nome utente esiste già.');
-    }
-    if (email_exists($email)) {
-        $errors->add('email', 'Questa email è già registrata.');
-    }
-
-    if (empty($errors->errors)) {
-        $user_id = wp_insert_user([
-            'user_login' => $username,
-            'user_email' => $email,
-            'user_pass' => $password,
-            // V1: ruolo WP standard, permessi scrivania gestiti per-stanza
-            'role' => 'subscriber'
-        ]);
-
-        if (!is_wp_error($user_id)) {
-            wp_set_current_user($user_id);
-            wp_set_auth_cookie($user_id);
-            wp_redirect(add_query_arg(null, null));
-            exit;
-        } else {
-            $errors->add('registrazione', 'Errore nella creazione dell\'utente.');
-        }
-    }
-}
-
-// Se l'utente non è loggato, mostra login o registrazione in base all'esistenza account
-if (!is_user_logged_in()) {
-    echo '<div class="site-main"><div class="container" style="max-width:600px; margin:0 auto; padding:2rem;">';
-    echo '<h2>Accedi per partecipare alla sessione</h2>';
-
-    $email_exists = email_exists($invito->invitato_email);
-
-    if ($email_exists) {
-        echo '<div style="margin-bottom: 2rem;">';
-        wp_login_form([ 'redirect' => esc_url(add_query_arg(null, null)) ]);
-        echo '</div>';
-        echo '<p style="margin-top:1rem;"><a href="' . esc_url(wp_lostpassword_url()) . '">Hai dimenticato la password?</a></p>';
-    } else {
-        echo '<p>Non risulta un account con questa email. Crea un account per continuare.</p>';
-        echo '<div style="border-top:1px solid #ccc; padding-top:2rem;">';
-        echo '<h3>Crea account</h3>';
-    }
-
-    if (!empty($errors) && is_wp_error($errors)) {
-        foreach ($errors->get_error_messages() as $msg) {
-            echo '<p style="color:red;">' . esc_html($msg) . '</p>';
-        }
-    }
-
-    if (!$email_exists) {
-        echo '<form method="post">';
-        echo '<p><label for="user_login">Nome utente</label><br><input type="text" name="user_login" required></p>';
-        echo '<p><label>Email</label><br><input type="email" value="' . esc_attr($invito->invitato_email) . '" readonly></p>';
-        echo '<input type="hidden" name="custom_register" value="1">';
-        echo '<p><label for="user_pass">Scegli una password</label><br><input type="password" name="user_pass" required></p>';
-        echo '<p><input type="submit" value="Registrati"></p>';
-        echo '</form>';
-        echo '</div>';
-    }
-
-    echo '</div></div>';
-    get_footer();
-    exit;
-}
+// Stesso percorso di registrazione senza piano utilizzato dagli inviti ai giochi.
+gim_require_invited_account('scrivania', $token);
 
 // Verifica che l'utente loggato sia l'invitato (obbligo logout se account sbagliato)
 $current_user = wp_get_current_user();
-if (strtolower($current_user->user_email) !== strtolower($invito->invitato_email)) {
+if (!gim_scrivania_invite_matches_user($invito, $current_user)) {
     $logout_url = wp_logout_url(add_query_arg(null, null));
+    status_header(403);
+    get_header();
     echo '<div class="site-main"><div class="container" style="max-width:700px; margin:0 auto; padding:2rem;">';
     echo '<h2>Account errato</h2>';
     echo '<p>Sei loggato con un account diverso da quello invitato. Per continuare devi uscire e accedere con l’email invitata.</p>';
@@ -375,6 +293,7 @@ if (!empty($set_parts)) {
 $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
 $session = $wpdb->get_row($wpdb->prepare("SELECT token FROM $table_sessions WHERE id = %d", intval($invito->sessione_id)));
 if (!$session || empty($session->token)) {
+    get_header();
     echo '<div class="site-main"><div class="container"><h2>Sessione non trovata</h2></div></div>';
     get_footer();
     exit;
@@ -383,7 +302,3 @@ if (!$session || empty($session->token)) {
 $redirect_url = scrivania_invite_build_url_on_request_host('/tool-scrivania/?token=' . urlencode($session->token) . '&invite_token=' . urlencode($token));
 wp_redirect($redirect_url);
 exit;
-
-// Non dovremmo mai arrivare qui, ma nel caso...
-get_footer();
-?>

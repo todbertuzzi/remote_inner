@@ -14,10 +14,9 @@ if (function_exists('nocache_headers')) {
     nocache_headers();
 }
 
-get_header();
-
 // Controlla se l'utente è loggato
 if (!is_user_logged_in()) {
+    get_header();
     $current_url = add_query_arg(null, null);
     echo '<div class="site-main-fw"><div class="container" style="max-width:700px; margin:0 auto; padding:2rem;">';
     echo '<h2>Devi effettuare l\'accesso per utilizzare questo strumento</h2>';
@@ -34,22 +33,22 @@ if (!is_user_logged_in()) {
 $current_user_id = get_current_user_id();
 $user_data = get_userdata($current_user_id);
 
-// Verifica se l'utente ha un abbonamento valido (solo se non è amministratore)
-$has_access = current_user_can('administrator');
-
-if (!$has_access && function_exists('pmpro_hasMembershipLevel')) {
-    $has_access = pmpro_hasMembershipLevel();
-}
-/* if (!$has_access) {
-    echo '<div class="site-main"><div class="container"><h2>Non hai i permessi necessari</h2><p>È richiesto un abbonamento attivo.</p></div></div>';
-    get_footer();
-    exit;
-} */
+// Gli invitati mantengono l'accesso alla sessione; il creatore deve avere un piano abilitato.
+$can_manage_scrivania = function_exists('scrivania_user_can_create_session')
+    && scrivania_user_can_create_session($current_user_id);
 
 // Ottieni il token dall'URL
 $token = isset($_GET['token']) ? sanitize_text_field($_GET['token']) : '';
 
 // Se non c'è token, controlla se l'utente ha una sessione esistente
+if (empty($token) && !$can_manage_scrivania) {
+    status_header(403);
+    get_header();
+    echo '<main class="site-main"><div class="container"><h2>Accesso riservato</h2><p>Per utilizzare la tua Scrivania è necessario un piano Professional o Gold. Per partecipare come invitato, apri il link del tuo invito.</p></div></main>';
+    get_footer();
+    exit;
+}
+
 if (empty($token)) {
     global $wpdb;
     $table_sessions = $wpdb->prefix . 'scrivania_sessioni';
@@ -63,6 +62,7 @@ if (empty($token)) {
     if ($session) {
         $token = $session->token;
     } else {
+        get_header();
         // Se siamo qui, l'utente non ha né token né sessioni esistenti
         echo '<div class="site-main-fw"><div class="container"><h2>Nessuna sessione disponibile</h2><p>Non hai sessioni attive e non hai specificato un token di invito.</p></div></div>';
         get_footer();
@@ -88,6 +88,7 @@ if (!$session) {
     ));
 
     if ($invito) {
+        get_header();
         echo '<div class="site-main-fw"><div class="container" style="max-width:800px; margin:0 auto; padding:2rem;">';
         echo '<h2>Link invito</h2>';
         echo '<p>Per accedere devi usare il link di invito e completare la verifica email.</p>';
@@ -97,12 +98,22 @@ if (!$session) {
         exit;
     }
 
+    get_header();
     echo '<div class="site-main"><div class="container"><h2>Token non valido</h2><p>Il token specificato non corrisponde a nessuna sessione.</p></div></div>';
     get_footer();
     exit;
 }
 // Autorizzazione: creator o invitato (user_id preferito, fallback email legacy)
 $is_creator = (intval($session->creatore_id) === intval($current_user_id));
+if ($is_creator && !$can_manage_scrivania) {
+    status_header(403);
+    get_header();
+    echo '<main class="site-main"><div class="container"><h2>Accesso riservato</h2><p>Per aprire le tue sessioni Scrivania è necessario un piano Professional o Gold.</p></div></main>';
+    get_footer();
+    exit;
+}
+get_header();
+
 $is_invited = false;
 $invito_role = 'viewer';
 

@@ -64,6 +64,10 @@ class Scrivania_Ajax {
     }
 
     private static function dashboard_require_nonce() {
+        if (!function_exists('scrivania_user_can_create_session') || !scrivania_user_can_create_session()) {
+            wp_send_json_error(array('message' => 'La gestione della Scrivania richiede un piano Professional o Gold.'), 403);
+            wp_die();
+        }
         $nonce = isset($_POST['nonce']) ? (string) $_POST['nonce'] : '';
         if (empty($nonce) || !wp_verify_nonce($nonce, self::DASHBOARD_INVITES_NONCE_ACTION)) {
             wp_send_json_error(array('message' => 'Nonce non valido'), 403);
@@ -771,6 +775,12 @@ class Scrivania_Ajax {
             wp_die();
         }
 
+        if (!function_exists('scrivania_user_can_create_session') || !scrivania_user_can_create_session()) {
+            status_header(403);
+            echo '<div class="dashboard-feedback dashboard-feedback--error">La Scrivania richiede un piano Professional o Gold.</div>';
+            wp_die();
+        }
+
         global $wpdb;
 
         $user_id = get_current_user_id();
@@ -803,7 +813,7 @@ class Scrivania_Ajax {
         $data = $scheduled_at->format('Y-m-d');
         $ora = $scheduled_at->format('H:i');
 
-        $emails = array_filter(array_map('sanitize_email', $emails));
+        $emails = array_values(array_unique(array_filter(array_map('sanitize_email', $emails))));
         if (empty($emails)) {
             echo '<div style="color:red;">Nessun contatto valido.</div>';
             wp_die();
@@ -839,6 +849,7 @@ class Scrivania_Ajax {
 
         $table = $wpdb->prefix . 'scrivania_invitati';
         $sent = 0;
+        $failed = array();
 
         // Cache colonne per compatibilità schema legacy
         $columns = $wpdb->get_col("DESC {$table}", 0);
@@ -876,7 +887,10 @@ class Scrivania_Ajax {
                 }
             }
 
-            $wpdb->insert($table, $insert);
+            if ($wpdb->insert($table, $insert) === false) {
+                $failed[] = $email;
+                continue;
+            }
 
             $link = home_url('/invito-scrivania/?token=' . $token);
             $subject = 'Invito al Tool Scrivania';
@@ -887,8 +901,11 @@ class Scrivania_Ajax {
             ';
             $headers = ['Content-Type: text/html; charset=UTF-8'];
 
-            wp_mail($email, $subject, $body, $headers);
-            $sent++;
+            if (wp_mail($email, $subject, $body, $headers)) {
+                $sent++;
+            } else {
+                $failed[] = $email;
+            }
         }
 
         // Mail di riepilogo all'invitante con link diretto alla sessione (utile per copia/incolla)
@@ -906,6 +923,18 @@ class Scrivania_Ajax {
                 '<p><strong>Inviti inviati:</strong> ' . intval($sent) . '</p>';
             $headers_owner = ['Content-Type: text/html; charset=UTF-8'];
             wp_mail($inviter_email, $subject_owner, $body_owner, $headers_owner);
+        }
+
+        if (isset($_POST['response_format']) && $_POST['response_format'] === 'json') {
+            wp_send_json_success(array(
+                'session_id' => $session_id,
+                'url' => esc_url_raw($session_link),
+                'sent' => $sent,
+                'failed' => $failed,
+                'recipients' => $emails,
+                'date' => $data,
+                'time' => $ora,
+            ));
         }
 
         echo "<div style='color:green; font-weight:600;'>Inviti inviati: " . intval($sent) . "</div>";

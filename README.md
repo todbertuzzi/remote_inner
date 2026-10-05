@@ -83,6 +83,14 @@ Un contenuto senza uno di questi livelli, oppure con più livelli di accesso con
 
 Per i giochi, il livello PMPro stabilisce quali giochi l'abbonato può vedere e per quali può creare un invito. Il destinatario non deve avere un abbonamento, ma può aprire soltanto la sessione associata alla propria email/utenza e al relativo UUID, se non revocata o scaduta.
 
+Gli amministratori con permesso `manage_options` possono aprire direttamente il permalink di un gioco (`/giochi/nome-gioco/`) senza invito. Il template prepara una sessione `admin_preview` privata dell’amministratore, riutilizzata per un’ora, senza creare inviti o inviare email. Unity riceve un UUID reale, compatibile con l’endpoint `game/v1/user-profile`. La pagina indica la modalità anteprima e non viene memorizzata in cache. Il permesso amministrativo viene ricontrollato anche nelle API; gli inviti ordinari mantengono i controlli sul destinatario, sulla scadenza e sulla revoca.
+
+La dashboard affianca `Anteprima` a `Invita`, con lo stesso stile. Anche gli abbonati possono aprire direttamente la pagina di un gioco pubblicato incluso nel loro piano: viene creata una sessione privata `member_preview`, riutilizzata per un’ora. La proprietà della sessione e l’accesso al gioco vengono ricontrollati nella pagina e nell’API Unity, anche dopo un cambio piano o una modifica alle categorie/pubblicazione del gioco. Le anteprime non inviano email e sono escluse dagli inviti ricevuti. Le pagine gioco, comprese le risposte di accesso negato, disabilitano la cache.
+
+Il piano Welcome continua a mostrare in dashboard soltanto il gioco Welcome più recente. La regola di autorizzazione consente i giochi classificati Welcome: il limite di una voce nella lista non vincola l’accesso a un ID di gioco fisso.
+
+Verifica locale dell’anteprima: `php plugins/innerplay-inviti-manager/tests/admin-game-preview.php`. I test usano sostituti WordPress/database e verificano helper, template, API e matrice dei piani. `php plugins/innerplay-inviti-manager/tests/game-preview-invites.php` verifica su SQLite in memoria che le anteprime siano escluse dagli inviti, anche con il limite di risultati. La build Unity completa e l’eventuale accesso diretto a `unity_build_url` vanno provati sul sito dopo la pubblicazione: la protezione della pagina WordPress non protegge da sola i file statici della build.
+
 I corsi sono protetti sia sull'URL frontend sia negli endpoint REST del singolo corso. La collezione REST mostra soltanto i corsi consentiti all'utente corrente.
 
 L'archivio pubblico `/Corsi` resta consultabile integralmente dai visitatori anonimi come catalogo. Per gli utenti autenticati, l'archivio e le altre liste frontend vengono filtrati con la matrice cumulativa del piano attivo; utenti autenticati senza un piano riconosciuto non vedono corsi disponibili.
@@ -121,6 +129,23 @@ La pagina richiede comunque il login e imposta automaticamente intestazioni anti
 I link diretti contenuti nelle email di invito hanno sempre la precedenza sul redirect predefinito. Anche un abbonato può aprire `I miei inviti` dal menu quando ha ricevuto inviti. Dopo la pubblicazione della nuova pagina, la vecchia pagina basata sul template `page-gestione-inviti.php` viene reindirizzata alla dashboard Elementor.
 
 
+Account registrati tramite invito
+
+Il plugin `Innerplay - Inviti Manager` registra il ruolo WordPress `invitato` (Utente Invitato), con il solo permesso `read`. La registrazione da invito per giochi e Scrivania assegna questo ruolo direttamente dal server; non assegna alcun piano PMPro, nemmeno Welcome. Il ruolo non sostituisce i controlli di identità, validità e permessi della singola sessione.
+
+- `/gioca/?invito=...`: un destinatario senza account trova il modulo di registrazione; un destinatario già registrato trova il login. Dopo la registrazione viene autenticato e torna al proprio invito.
+- `/invito-scrivania/?token=...`: mantiene la conferma esplicita dell’invito e usa lo stesso modulo senza piano. Un invito già utilizzato richiede l’accesso all’account associato.
+- I vecchi link `/login/?redirect_to=...` diretti a queste due pagine vengono recuperati automaticamente. La normale pagina login e la scelta dei piani restano separate da questo percorso.
+
+L’email è vincolata al destinatario salvato nel database. Il modulo verifica un nonce specifico dell’invito e rilegge disponibilità e destinatario prima di creare l’account. Inviti inesistenti, revocati, scaduti, anteprime private, giochi non pubblicati e Scrivanie archiviate non consentono la registrazione. Gli account esistenti non vengono ricreati o convertiti al momento del login.
+
+Quando un invitato attiva un piano PMPro, passa al ruolo `subscriber` mantenendo lo stesso ID e i propri inviti. Se non rimangono piani attivi, un account nato da invito con il solo ruolo `subscriber` torna `invitato`. Eventuali ruoli aggiuntivi o amministrativi vengono conservati. Non viene effettuata una conversione massiva dei vecchi utenti `subscriber`.
+
+Per pubblicare il flusso aggiornare insieme `innerplay-inviti-manager.php`, `includes/invite-registration.php`, `assets/invite-registration.css` e i file del tema child `functions.php`, `page-gioca.php`, `page-invito-scrivania.php`, `single-gioco.php`. Escludere le pagine degli inviti dalle cache esterne e non applicarvi restrizioni PMPro: il controllo avviene tramite l’invito. Non occorre modificare il blocco Elementor della pagina login.
+
+Verifica locale: `php plugins/innerplay-inviti-manager/tests/invite-registration.php`. Esegue le funzioni reali e i template con sostituti di WordPress/database: registrazione, login, identità vincolata, nonce, password, permessi, cambio piano e recupero dei vecchi URL. Il collaudo finale con WordPress e PMPro reali va eseguito nell’ambiente integrato.
+
+
 Gestione dei mazzi della Scrivania
 
 Il catalogo sorgente dei mazzi si trova nel progetto React `scrivania-app/src/data/decks.json`. Il comando `npm run build:wp`, eseguito dalla cartella `scrivania-app`, valida le immagini, compila React e sincronizza nel plugin questo file:
@@ -129,8 +154,10 @@ Il catalogo sorgente dei mazzi si trova nel progetto React `scrivania-app/src/da
 
 La dashboard WordPress e l'app React derivano quindi le opzioni dalla stessa configurazione. Il mazzo viene scelto durante la creazione della sessione e salvato in `impostazioni.mazzoId`; non è modificabile in seguito.
 
-La creazione della sessione è protetta sia via AJAX sia via REST con autenticazione e controllo del piano. Sono ammessi amministratori e utenti Welcome, Professional o Gold. L'ID del mazzo deve corrispondere a una voce attiva del catalogo. Il creatore e gli editor invitati possono vedere il mazzo della sessione, aggiungere carte e modificarle. Gli editor possono anche rimuovere carte; la gestione dei partecipanti resta riservata al creatore. Il ritorno al ruolo viewer nasconde il mazzo e disabilita le modifiche in tempo reale.
+La creazione della sessione è protetta sia via AJAX sia via REST con autenticazione e controllo del piano. Sono ammessi amministratori e utenti con piano Professional o Gold attivo. Welcome non vede la sezione Scrivania, la gestione degli inviti Scrivania o la relativa finestra nella dashboard. La stessa regola viene verificata per l’apertura e l’uso delle sessioni del creatore già esistenti (pagina, REST, autenticazione Pusher e gestione AJAX degli inviti), quindi un downgrade a Welcome o la perdita del piano blocca le successive richieste del creatore. Gli invitati mantengono l’accesso alla sessione secondo il proprio invito e ruolo, anche senza piano a pagamento. L'ID del mazzo deve corrispondere a una voce attiva del catalogo. Il creatore e gli editor invitati possono vedere il mazzo della sessione, aggiungere carte e modificarle. Gli editor possono anche rimuovere carte; la gestione dei partecipanti resta riservata al creatore. Il ritorno al ruolo viewer nasconde il mazzo e disabilita le modifiche in tempo reale.
 
 Per aggiungere un mazzo non serve modificare il markup della dashboard o il codice PHP: si aggiungono gli asset `public/assets/mazzo_ID`, la voce nel catalogo React e si esegue `npm run build:wp`. Gli ID dei mazzi già pubblicati non devono essere riutilizzati o cambiati.
 
 Il test dei permessi si esegue dalla radice di questo repository con `php plugins/scrivania-collaborativa-api/tests/editor-permissions.php`. Richiama gli handler reali dell'API usando sostituti locali di WordPress e del database: verifica aggiunta e salvataggio per gli editor, blocco per viewer e revocati, rimozione consentita a creatore ed editor, mazzo immutabile e conflitti di versione. La verifica finale con due account WordPress e Pusher va eseguita nell'ambiente integrato.
+
+Verifica della visibilità e dell’accesso diretto alla Scrivania: `php plugins/scrivania-collaborativa-api/tests/membership-templates.php`. Il test `editor-permissions.php` verifica anche la nuova matrice dei piani e il blocco dei creatori non più abilitati sulle API e sulla gestione inviti.

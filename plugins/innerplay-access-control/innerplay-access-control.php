@@ -212,6 +212,11 @@ function ipt_user_can_invite_game($user_id, $game_id) {
         && ipt_user_can_access_content($user_id, $game_id);
 }
 
+function ipt_user_can_preview_game($user_id, $game_id) {
+    return get_post_type($game_id) === 'gioco'
+        && (user_can($user_id, 'manage_options') || ipt_user_can_invite_game($user_id, $game_id));
+}
+
 /**
  * Valida integralmente l'accesso dell'invitato a una sessione gioco.
  * Ritorna true oppure WP_Error con lo status HTTP appropriato.
@@ -237,6 +242,25 @@ function ipt_validate_game_session_access($session, $current_user, $expected_gam
     $expected_game_id = intval($expected_game_id);
     if ($expected_game_id > 0 && intval($session->gioco_id) !== $expected_game_id) {
         return new WP_Error('wrong_game', 'La sessione appartiene a un altro gioco.', array('status' => 409));
+    }
+
+    // Le anteprime restano private e richiedono il permesso admin a ogni accesso,
+    // anche se il ruolo dell'utente è cambiato dopo la creazione della sessione.
+    if ($status === 'admin_preview' && (
+        !user_can($current_user, 'manage_options')
+        || intval($session->host_user_id ?? 0) !== intval($current_user->ID)
+        || intval($session->invited_user_id ?? 0) !== intval($current_user->ID)
+    )) {
+        return new WP_Error('preview_forbidden', 'Anteprima riservata all’amministratore che l’ha aperta.', array('status' => 403));
+    }
+
+    // Il piano e la classificazione del gioco possono cambiare durante l'anteprima.
+    if ($status === 'member_preview' && (
+        intval($session->host_user_id ?? 0) !== intval($current_user->ID)
+        || intval($session->invited_user_id ?? 0) !== intval($current_user->ID)
+        || !ipt_user_can_preview_game($current_user->ID, intval($session->gioco_id))
+    )) {
+        return new WP_Error('preview_forbidden', 'Anteprima non disponibile per questo utente o per il piano attivo.', array('status' => 403));
     }
 
     $invited_user_id = isset($session->invited_user_id) ? intval($session->invited_user_id) : 0;
