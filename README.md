@@ -1,6 +1,31 @@
 
 Descrizione piattaforma Wordpress
 
+Integrazione Fatture in Cloud: la versione 0.5.5 del plugin `fatture-in-cloud-sync`
+consente il collaudo del collegamento, una simulazione locale e la creazione manuale
+di documenti da ordini PMPro PayPal Sandbox pagati, senza invio allo SDI o email.
+Il checkout dei piani a pagamento raccoglie dati fiscali per privati e aziende /
+professionisti italiani e ne salva una copia nell'ordine prima del passaggio a
+PayPal. L'anteprima usa quella copia, senza dipendere dalle modifiche del profilo.
+È disponibile anche un recupero manuale verificato dell'ID del primo incasso
+per ordini del nuovo gateway PayPal Sandbox completati con riferimento mancante.
+La sezione 4 consente inoltre di attivare una coda automatica per i nuovi primi
+acquisti di abbonamenti PayPal Sandbox, con controllo dei totali, ritentativi
+limitati e monitoraggio degli esiti. L'automazione parte disattivata.
+È disponibile un'opzione distinta per recuperare dalla API PayPal Sandbox
+l'ID di un primo incasso completato quando manca nell'ordine già pagato.
+La sezione 5 offre una diagnostica temporanea delle API e dei webhook PayPal
+Sandbox, senza registrare credenziali o dati cliente né cambiare il checkout.
+Le descrizioni in fattura sono configurabili separatamente per ciascun piano
+PMPro, con lo stesso testo per creazione manuale e automatica.
+L'oggetto nell'elenco FIC usa la descrizione del piano; il riferimento tecnico
+per il recupero degli invii incerti viene conservato nelle note.
+Installazione e limiti sono descritti nella
+[guida del plugin](plugins/fatture-in-cloud-sync/README.md).
+
+Email transazionali: [inventario dei messaggi e dei file coinvolti](docs/analisi-email-transazionali.md),
+con [anteprima dei contenuti personalizzati](docs/email-transazionali-anteprima.html).
+
 Dal backend l’utente amministratore potrà creare corsi, giochi e mazzi di carte da utilizzare nel tool "scrivania".
 
 Il contenuto dei corsi potrà essere costituito da video e quiz di valutazione a domanda chiusa.

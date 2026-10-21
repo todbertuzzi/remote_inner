@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Email della piattaforma — contenuti attuali</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f3f4f6; color: #17212e; font: 15px/1.6 system-ui, sans-serif; }
+    header, main, .controls, footer { max-width: 1000px; margin: auto; padding: 24px; }
+    header { padding-top: 40px; padding-bottom: 12px; }
+    h1 { font-size: clamp(24px, 4vw, 34px); line-height: 1.2; margin: 0 0 16px; }
+    h2 { font-size: 21px; margin: 0 0 8px; }
+    p { margin: 10px 0; }
+    .intro { max-width: 820px; }
+    .note { border-left: 3px solid #65788e; padding-left: 14px; color: #475569; }
+    .controls { display: flex; align-items: center; gap: 12px; padding-top: 8px; padding-bottom: 8px; }
+    .controls label { background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 16px; cursor: pointer; }
+    .mode { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    #desktop:checked ~ .controls label[for="desktop"], #mobile:checked ~ .controls label[for="mobile"] { color: white; background: #253d58; border-color: #253d58; }
+    #desktop:focus-visible ~ .controls label[for="desktop"], #mobile:focus-visible ~ .controls label[for="mobile"] { outline: 3px solid #769abe; outline-offset: 3px; }
+    main { padding-top: 12px; }
+    article { margin-bottom: 28px; background: white; border: 1px solid #d8dfe7; border-radius: 10px; overflow: hidden; }
+    .context { padding: 22px 24px; border-bottom: 1px solid #e2e8f0; }
+    .tag { display: inline-block; margin-bottom: 8px; font-size: 12px; font-weight: 650; color: #45617e; }
+    .meta { font-size: 13px; color: #526275; }
+    .subject { margin-top: 16px; color: #17212e; font-size: 14px; }
+    .email-preview { display: block; width: 100%; margin: auto; background: white; border: none; }
+    #mobile:checked ~ main .email-preview { width: min(100%, 360px); border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; }
+    .review { padding: 14px 24px; background: #f8fafc; border-top: 1px solid #e2e8f0; font-size: 13px; color: #526275; }
+    .review strong { color: #17212e; }
+    footer { color: #526275; font-size: 13px; padding-top: 0; padding-bottom: 36px; }
+    code { overflow-wrap: anywhere; }
+    @media (max-width: 540px) { header, main, .controls, footer { padding-left: 16px; padding-right: 16px; } .context, .review { padding-left: 16px; padding-right: 16px; } }
+    @media print { body { background: white; } .controls { display: none; } article { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Email della piattaforma: contenuti attuali</h1>
+    <p class="intro">Anteprima delle email personalizzate individuate nei file, aggiornata al 13 ottobre 2026. I dati e i link sono fittizi. L’area bianca mostra il corpo esistente, senza un nuovo template grafico.</p>
+    <p class="note">Non rappresenta una email inviata né il layout finale del sito: eventuali trasformazioni di PMPro, SMTP e dei client email non sono incluse. I link degli esempi sono disabilitati. Per il catalogo di WordPress e PMPro, leggi <a href="analisi-email-transazionali.md">il rapporto completo</a>.</p>
+  </header>
+  <input class="mode" type="radio" name="width" id="desktop" checked>
+  <input class="mode" type="radio" name="width" id="mobile">
+  <div class="controls" role="group" aria-label="Larghezza delle anteprime">
+    <span>Larghezza:</span><label for="desktop">Desktop</label><label for="mobile">Mobile · 360 px</label>
+  </div>
+  <main>
+    <article>
+      <div class="context">
+        <span class="tag">E01 · GIOCO · TESTO SEMPLICE</span>
+        <h2>Invito a un gioco</h2>
+        <p class="meta">Destinatario: contatto scelto. Invio: creazione della partita dalla dashboard.</p>
+        <p class="meta">Sorgente: <code>plugins/innerplay-inviti-manager/innerplay-inviti-manager.php:806</code></p>
+        <p class="subject"><strong>Oggetto:</strong> Sei stato invitato a giocare</p>
+      </div>
+      <iframe class="email-preview" title="Corpo attuale dell’invito gioco" height="145" sandbox="" srcdoc="&lt;!doctype html&gt;&lt;html lang='it'&gt;&lt;meta charset='utf-8'&gt;&lt;style&gt;body{margin:20px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}&lt;/style&gt;&lt;pre&gt;Clicca per entrare in partita: https://esempio.invalid/gioca?invito=UUID_DI_ESEMPIO&lt;/pre&gt;&lt;/html&gt;"></iframe>
+      <div class="review"><strong>Da valutare:</strong> titolo del gioco, nome dell’invitante e scadenza non sono presenti. Nel codice l’invito dura 24 ore.</div>
+    </article>
+    <article>
+      <div class="context">
+        <span class="tag">E02 · SCRIVANIA · HTML</span>
+        <h2>Primo invito alla Scrivania</h2>
+        <p class="meta">Destinatario: ogni contatto invitato. Invio immediato alla creazione; data e ora descrivono la sessione.</p>
+        <p class="meta">Sorgente: <code>plugins/scrivania-collaborativa-api/includes/class-scrivania-ajax.php:895</code></p>
+        <p class="subject"><strong>Oggetto:</strong> Invito al Tool Scrivania</p>
+      </div>
+      <iframe class="email-preview" title="Corpo attuale del primo invito Scrivania" height="165" sandbox="" srcdoc="&lt;!doctype html&gt;&lt;html lang='it'&gt;&lt;meta charset='utf-8'&gt;&lt;style&gt;body{margin:20px}a{pointer-events:none}&lt;/style&gt;&lt;p&gt;Hai ricevuto un invito al Tool Scrivania!&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Quando:&lt;/strong&gt; 14/10/2026 alle 15:30&lt;/p&gt;&lt;p&gt;&lt;a href='https://esempio.invalid/invito-scrivania/?token=TOKEN_DI_ESEMPIO'&gt;Clicca qui per partecipare&lt;/a&gt;&lt;/p&gt;&lt;/html&gt;"></iframe>
+      <div class="review"><strong>Da valutare:</strong> identità dell’invitante, nome della sessione, ruolo e fuso orario. Logo, firma e assistenza non sono definiti in questo corpo.</div>
+    </article>
+    <article>
+      <div class="context">
+        <span class="tag">E03 · REINVIO / REINVITO · HTML</span>
+        <h2>Reinvio alla Scrivania</h2>
+        <p class="meta">Destinatario: contatto selezionato in “Gestisci inviti”. Il testo non distingue reinvio e nuovo invito dopo revoca.</p>
+        <p class="meta">Sorgente: <code>class-scrivania-ajax.php:277</code>, chiamato a riga 735. E05, il fallback di Inviti Manager, usa un’altra copia dello stesso contenuto.</p>
+        <p class="subject"><strong>Oggetto:</strong> Invito al Tool Scrivania</p>
+      </div>
+      <iframe class="email-preview" title="Corpo attuale del reinvio Scrivania" height="165" sandbox="" srcdoc="&lt;!doctype html&gt;&lt;html lang='it'&gt;&lt;meta charset='utf-8'&gt;&lt;style&gt;body{margin:20px}a{pointer-events:none}&lt;/style&gt;&lt;p&gt;Hai ricevuto un invito al Tool Scrivania!&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Quando:&lt;/strong&gt; 14/10/2026 alle 15:30&lt;/p&gt;&lt;p&gt;&lt;a href='https://esempio.invalid/invito-scrivania/?token=TOKEN_DI_ESEMPIO'&gt;Clicca qui per partecipare&lt;/a&gt;&lt;/p&gt;&lt;/html&gt;"></iframe>
+      <div class="review"><strong>Da valutare:</strong> un contenuto unico condiviso con il primo invio, eventualmente con una frase specifica per il reinvio. La formulazione attuale è identica.</div>
+    </article>
+    <article>
+      <div class="context">
+        <span class="tag">E04 · CREATORE SCRIVANIA · HTML</span>
+        <h2>Riepilogo della sessione per il creatore</h2>
+        <p class="meta">Destinatario: creatore/invitante. Dopo i tentativi di invio ai partecipanti; può arrivare anche con inviti falliti.</p>
+        <p class="meta">Sorgente: <code>plugins/scrivania-collaborativa-api/includes/class-scrivania-ajax.php:915</code></p>
+        <p class="subject"><strong>Oggetto:</strong> Link sessione Tool Scrivania (solo creatore)</p>
+      </div>
+      <iframe class="email-preview" title="Corpo attuale del riepilogo creatore" height="420" sandbox="" srcdoc="&lt;!doctype html&gt;&lt;html lang='it'&gt;&lt;meta charset='utf-8'&gt;&lt;style&gt;body{margin:20px;overflow-wrap:anywhere}a{pointer-events:none}&lt;/style&gt;&lt;p&gt;Hai creato una sessione del Tool Scrivania.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Quando:&lt;/strong&gt; 14/10/2026 alle 15:30&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Dettagli tecnici:&lt;/strong&gt; sessione ID 123 &amp;middot; creatore ID 7 &amp;middot; invitante ID 7&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Link per accedere alla tua sessione (solo creatore):&lt;/strong&gt;&lt;br /&gt;&lt;a href='https://esempio.invalid/tool-scrivania/?token=TOKEN_SESSIONE_DI_ESEMPIO'&gt;https://esempio.invalid/tool-scrivania/?token=TOKEN_SESSIONE_DI_ESEMPIO&lt;/a&gt;&lt;/p&gt;&lt;p style='margin-top:12px; color:#555;'&gt;Nota: gli invitati devono entrare dal link &lt;strong&gt;/invito-scrivania/?token=...&lt;/strong&gt; ricevuto nella loro email (non da questo link).&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Inviti inviati:&lt;/strong&gt; 2&lt;/p&gt;&lt;/html&gt;"></iframe>
+      <div class="review"><strong>Da valutare:</strong> sostituire gli ID tecnici con informazioni utili alla sessione e mostrare gli eventuali invii falliti. Mantenere distinto il link riservato al creatore.</div>
+    </article>
+  </main>
+  <footer>Questa anteprima riguarda solo i contenuti personalizzati presenti nel repository. I testi PMPro salvati nel database e i wrapper effettivi non sono stati letti. L’addon Email Tutor LMS Pro è disattivato, come confermato dall’utente.</footer>
+</body>
+</html>
