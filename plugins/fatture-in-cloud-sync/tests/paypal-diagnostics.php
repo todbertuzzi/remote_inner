@@ -24,11 +24,26 @@ class DiagnosticsDB {
     public $queries = [];
     public function prepare($query, $id) { $this->queries[] = [$query, $id]; return str_replace('%d', (string) (int) $id, $query); }
     public function get_row($query) {
+        if (str_starts_with($query, 'SELECT id, gateway, gateway_environment, status, subscription_transaction_id, payment_transaction_id FROM wp_pmpro_membership_orders WHERE id = ')) return $GLOBALS['probe_order'];
         if (str_starts_with($query, 'SELECT id, status, payment_transaction_id FROM wp_pmpro_membership_orders WHERE id = ')) {
             return (object) ['id' => 56, 'status' => 'success', 'payment_transaction_id' => $GLOBALS['payment']];
         }
         throw new RuntimeException('Unexpected database operation');
     }
+}
+class PMPro_PayPal_API {
+    public function get_subscription($id) { $GLOBALS['probe_calls'][] = ['subscription', $id]; return $GLOBALS['probe_subscription']; }
+    public function get_subscription_transactions($id, $start, $end) {
+        $GLOBALS['probe_calls'][] = ['transactions', $id, $start, $end];
+        return array_shift($GLOBALS['probe_responses']);
+    }
+    public function __call($name, $args) { throw new RuntimeException('Unexpected PayPal operation'); }
+}
+function wp_next_scheduled($hook, $args) { return $GLOBALS['cron_events'][$hook . json_encode($args)] ?? false; }
+function wp_schedule_single_event($time, $hook, $args, $error = false) {
+    if (!empty($GLOBALS['cron_fail'])) return new WP_Error('schedule', 'PRIVATE_SENTINEL');
+    $GLOBALS['cron_events'][$hook . json_encode($args)] = $time;
+    return true;
 }
 $wpdb = new DiagnosticsDB();
 function add_action($name, $callback, $priority, $count) { $GLOBALS['hooks'][$name][] = $callback; }
@@ -108,7 +123,7 @@ check(is_wp_error($diag->dispatch('diag_enable')), 'Unavailable protected path r
 $unavailable = false;
 check(!is_wp_error($diag->dispatch('diag_enable')), 'Enable diagnostics');
 check($options[PMPro_FIC_Diagnostics::OPTION]['until'] > time() + 3590, '60 minute expiry');
-check(count($hooks) === 7, 'All passive observers registered');
+check(count($hooks) === 8 && isset($hooks[PMPro_FIC_Diagnostics::CRON_HOOK]), 'Passive observers and dedicated harmless cron registered');
 $request = new Request(['id' => 'WH-EXAMPLE12345', 'event_type' => 'BILLING.SUBSCRIPTION.ACTIVATED',
     'resource' => ['id' => 'I-8TG2LLTDSLSW', 'create_time' => '2026-10-14T10:37:00Z', 'subscriber' => ['email_address' => 'PRIVATE_SENTINEL']]]);
 check($diag->rest_before(null, null, $request) === null, 'REST dispatch unchanged');
@@ -176,6 +191,60 @@ clearstatcache(); $before = filesize(logfile()); exchange($url, $full); clearsta
 ob_start(); $diag->render(['message' => 'Done'], 'diag_disable'); $html = ob_get_clean();
 check(str_contains($html, '#fic-diagnostics') && str_contains($html, 'Scarica registro diagnostico PayPal'), 'Panel anchor and restricted download survive disable');
 check(!str_contains($html, $log_dir), 'No filesystem path in UI');
+// Explicit comparison works on an already invoiced order, even with passive logging off.
+$probe_calls = [];
+$probe_order = (object) ['id' => 56, 'gateway' => 'paypal', 'gateway_environment' => 'sandbox', 'status' => 'success',
+    'subscription_transaction_id' => 'I-8TG2LLTDSLSW', 'payment_transaction_id' => '844753021M0826123'];
+$probe_subscription = ['id' => 'I-8TG2LLTDSLSW', 'status' => 'ACTIVE', 'create_time' => '2026-10-14T10:38:03Z'];
+$probe_responses = [[], json_decode($full['body'], true)];
+$result = $diag->dispatch('diag_compare', ['order_id' => '56']);
+check(is_array($result) && count($probe_calls) === 3, 'Comparison performs one subscription and two transaction reads');
+check($probe_calls[1][2] === '2026-10-14T09:38:03Z' && $probe_calls[2][2] === '2026-10-14T09:38:03+00:00'
+    && strtotime($probe_calls[1][3]) === strtotime($probe_calls[2][3]), 'Both date forms select identical instants');
+check($result['report']['order_status'] === 'success' && $result['report']['subscription_status'] === 'ACTIVE'
+    && $result['report']['payment_id_present'], 'Separate order status, subscription state and payment reference');
+check($result['report']['readings'][0]['decoded_gateway_response']['transactions_type'] === 'missing'
+    && $result['report']['readings'][1]['decoded_gateway_response']['count'] === 1, 'Comparison shows incomplete and complete decoded lists separately');
+check(!isset($result['report']['readings'][0]['decoded_gateway_response']['http_status']), 'Decoded API result never fabricates HTTP success');
+ob_start(); $diag->render($result, 'diag_compare'); $html = ob_get_clean();
+check(!str_contains($html, 'PRIVATE_SENTINEL') && str_contains($html, 'decoded_gateway_response'), 'Comparison report is sanitized and visible');
+$probe_responses = [new WP_Error('secret', 'PRIVATE_SENTINEL'), ['transactions' => null]];
+$result = $diag->dispatch('diag_compare', ['order_id' => '56']);
+check($result['report']['readings'][0]['decoded_gateway_response'] === ['gateway_error' => true]
+    && $result['report']['readings'][1]['decoded_gateway_response']['transactions_type'] === 'null', 'Errors and null lists remain distinct without raw messages');
+foreach (['diag_compare', 'diag_cron'] as $action) {
+    $admin = false; check(is_wp_error($diag->dispatch($action, ['order_id' => '56'])), 'Probe requires administrator'); $admin = true;
+    $nonce = false;
+    try { $diag->dispatch($action, ['order_id' => '56']); check(false, 'Nonce must fail'); } catch (RuntimeException $e) { check($e->getMessage() === 'nonce', 'Probe requires nonce'); }
+    $nonce = true;
+}
+$before_calls = count($probe_calls);
+foreach (['', '56 OR 1=1', ['56'], '0'] as $id) check(is_wp_error($diag->dispatch('diag_compare', ['order_id' => $id])), 'Invalid comparison ID rejected');
+$probe_order->gateway_environment = 'live';
+check(is_wp_error($diag->dispatch('diag_compare', ['order_id' => '56'])), 'Live historical order rejected');
+$probe_order->gateway_environment = 'sandbox'; $options['pmpro_gateway_environment'] = 'live';
+check(is_wp_error($diag->dispatch('diag_compare', ['order_id' => '56'])), 'Live gateway rejected before API construction');
+$options['pmpro_gateway_environment'] = 'sandbox';
+check(count($probe_calls) === $before_calls, 'Invalid requests make no API calls');
+$probe_subscription['id'] = 'I-OTHER12345';
+check(is_wp_error($diag->dispatch('diag_compare', ['order_id' => '56'])) && count($probe_calls) === $before_calls + 1, 'Wrong subscription stops before transaction reads');
+$probe_subscription['id'] = 'I-8TG2LLTDSLSW'; $probe_subscription['create_time'] = '2026-02-30T10:38:03Z';
+check(is_wp_error($diag->dispatch('diag_compare', ['order_id' => '56'])), 'Invalid calendar date rejected');
+$cron_events = [];
+check(is_array($diag->dispatch('diag_cron')), 'Harmless cron probe can be scheduled');
+$probe = $options[PMPro_FIC_Diagnostics::CRON_OPTION];
+check(count($cron_events) === 1 && $probe['due_at'] >= time() + 59, 'Single separate event due in one minute');
+$diag->dispatch('diag_cron'); check(count($cron_events) === 1 && $probe === $options[PMPro_FIC_Diagnostics::CRON_OPTION], 'Repeated scheduling preserves pending probe');
+$diag->cron_tick($probe['id']); check(!$options[PMPro_FIC_Diagnostics::CRON_OPTION]['ran_at'], 'Normal page cannot fake cron execution');
+define('DOING_CRON', true);
+$diag->cron_tick('wrong'); check(!$options[PMPro_FIC_Diagnostics::CRON_OPTION]['ran_at'], 'Stale event cannot complete current probe');
+$diag->cron_tick($probe['id']); check($options[PMPro_FIC_Diagnostics::CRON_OPTION]['ran_at'] >= $probe['scheduled_at'], 'Cron records execution without invoice worker or email');
+$finished = $options[PMPro_FIC_Diagnostics::CRON_OPTION]; $diag->cron_tick($probe['id']);
+check($options[PMPro_FIC_Diagnostics::CRON_OPTION] === $finished, 'Repeated tick preserves original execution time');
+ob_start(); $diag->render(null, ''); $html = ob_get_clean();
+check(str_contains($html, 'Eseguita UTC') && !str_contains($html, $probe['id']), 'Cron status visible without internal token');
+$cron_events = []; $cron_fail = true;
+check(is_wp_error($diag->dispatch('diag_cron')), 'Scheduling error reported');
 $options[PMPro_FIC_Diagnostics::OPTION] = ['until' => time() + 3600];
 $lock = fopen(logfile(), 'r+b'); flock($lock, LOCK_EX);
 $started = microtime(true); exchange($url, $full); check(microtime(true) - $started < 1, 'Occupied log does not block checkout');

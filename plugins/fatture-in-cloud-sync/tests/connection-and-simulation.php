@@ -30,6 +30,20 @@ function is_wp_error($value) { return $value instanceof WP_Error; }
 function wp_remote_retrieve_response_code($response) { return $response['status']; }
 function wp_remote_retrieve_body($response) { return $response['body']; }
 function wp_remote_get($url, $args) {
+    if (strpos($url, 'https://api-m.sandbox.paypal.com/v1/payments/sale/') === 0) {
+        $GLOBALS['sale_requests'][] = [$url, $args];
+        if (isset($GLOBALS['on_sale_request'])) ($GLOBALS['on_sale_request'])($url, $args);
+        if (!empty($GLOBALS['sale_responses'])) return array_shift($GLOBALS['sale_responses']);
+        $id = basename($url);
+        foreach ($GLOBALS['orders'] ?? [] as $oid => $fields) {
+            $order = new MemberOrder($oid);
+            if ($order->payment_transaction_id !== $id) continue;
+            $at = $GLOBALS['paypal_transactions']['transactions'][0]['time'] ?? gmdate('Y-m-d\TH:i:s\Z', $order->timestamp);
+            return ['status'=>200, 'body'=>json_encode(['id'=>$id, 'state'=>'completed', 'billing_agreement_id'=>$order->subscription_transaction_id,
+                'amount'=>['total'=>number_format((float)$order->total, 2, '.', ''), 'currency'=>'EUR'], 'create_time'=>$at])];
+        }
+        throw new RuntimeException('Unexpected PayPal sale GET');
+    }
     $GLOBALS['requests'][] = [$url, $args];
     if (isset($GLOBALS['on_fic_request'])) ($GLOBALS['on_fic_request'])($url, $args, 'GET');
     if (!$GLOBALS['responses']) throw new RuntimeException('Unexpected GET: ' . $url);

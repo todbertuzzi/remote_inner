@@ -5,6 +5,7 @@ require_once __DIR__ . '/manual-orders.php';
 function wp_timezone() { return new DateTimeZone('Europe/Rome'); }
 
 class PMPro_PayPal_API {
+    public function get_access_token() { return 'fake-sandbox-token'; }
     public function get_subscription($id) {
         $GLOBALS['paypal_calls'][] = ['subscription', $id];
         return $GLOBALS['paypal_subscription'];
@@ -18,14 +19,14 @@ class PMPro_PayPal_API {
 }
 
 /** Executes the conditional update in SQLite, translating only MySQL's UPDATE JOIN syntax. */
-class RecoveryDatabase {
+class RecoveryDatabase extends AtomicOptionsDatabase {
     public $pmpro_membership_orders = 'wp_pmpro_membership_orders';
     public $queries = 0;
     public $before_update = null;
     public $query_error = false;
     public $after_readback = null;
     private $db;
-    public function __construct() { $this->db = new PDO('sqlite::memory:'); }
+    public function __construct() { parent::__construct(); $this->db = new PDO('sqlite::memory:'); }
     public function prepare($sql, ...$args) {
         $position = 0;
         $prepared = preg_replace_callback('/%[sd]/', function ($match) use ($args, &$position) {
@@ -36,6 +37,7 @@ class RecoveryDatabase {
         return $prepared;
     }
     public function query($sql) {
+        if (strpos($sql, 'wp_options') !== false) return parent::query($sql);
         $this->queries++;
         if ($this->query_error) return false;
         $this->db->exec('DROP TABLE IF EXISTS wp_pmpro_membership_orders');

@@ -2,6 +2,7 @@
 /** Run: php plugins/fatture-in-cloud-sync/tests/manual-orders.php */
 define('PMPRO_FIC_TEST_BOOTSTRAP', true);
 define('MINUTE_IN_SECONDS', 60);
+require_once __DIR__ . '/support-atomic.php';
 class MemberOrder {
     public $id = 0;
     public $user_id = 10;
@@ -57,6 +58,8 @@ require __DIR__ . '/connection-and-simulation.php';
 function fixture() {
     global $plugin, $pmpro_currency;
     reset_fixture();
+    $GLOBALS['wpdb'] = new AtomicOptionsDatabase();
+    $GLOBALS['sale_requests'] = []; $GLOBALS['sale_responses'] = [];
     $pmpro_currency = 'EUR';
     foreach (['settings_store', 'order_meta', 'post_requests', 'post_responses', 'totals_responses', 'created_requests'] as $key) $GLOBALS[$key] = [];
     foreach (['fail_meta', 'fail_storage', 'fail_after_post'] as $key) $GLOBALS[$key] = false;
@@ -265,7 +268,7 @@ $service = fixture(); $p = preview($service);
 check(count($post_requests) === 1 && str_ends_with($post_requests[0][0], '/issued_documents/totals'), 'Preview uses documented non-creating totals endpoint');
 $calculation = json_decode($post_requests[0][1]['body'], true);
 check(!isset($calculation['data']['payments_list']) && !isset($calculation['options']), 'Calculates invoice without conflicting payment sum');
-check($p['totals_verified'] === true && $p['preview_version'] === 4, 'Preview records remote totals validation and readable subject format');
+check($p['totals_verified'] === true && $p['preview_version'] === 5, 'Preview records remote totals and payment validation');
 check($p['payload']['options']['fix_payments'] === true && $p['payload']['data']['payments_list'][0]['amount'] == 122, 'Payment alignment only after exact paid-total check');
 check($p['payload']['data']['stamp_duty'] === 0 && $p['payload']['data']['withholding_tax'] === 0
     && $p['payload']['data']['items_list'][0]['apply_withholding_taxes'] === false, 'Simple test explicitly disables additional charges and withholding defaults');
@@ -379,5 +382,45 @@ $settings_store['pmpro_fic_test_order_42']['requested_at'] -= 121;
 unset($settings_store['pmpro_fic_test_order_42']['marker']);
 error_is($service->dispatch('recover_order', ['order_id'=>'42']), 'invalid_attempt');
 check(posts() === 1 && isset($settings_store['pmpro_fic_lock_42']), 'Missing journal marker fails closed');
+
+// Scan cap cannot certify a unique marker; an absent match never permits a new POST.
+foreach (['absent', 'match', 'complete'] as $scan_case) {
+    $service = fixture(); $p = preview($service); $post_responses = [new WP_Error('timeout','ambiguous')];
+    $service->dispatch('create_order', ['preview_id'=>$p['preview_id']]);
+    $settings_store['pmpro_fic_test_order_42']['requested_at'] -= 121;
+    $responses = [];
+    for ($page=1;$page<=5;$page++) {
+        $rows = [];
+        for ($i=1;$i<=100;$i++) $rows[] = ['id'=>($page-1)*100+$i, 'amount_gross'=>122,
+            'subject'=>($scan_case !== 'absent' && $page===1 && $i===1) ? $p['marker'] : 'Other'];
+        $responses[] = $scan_case === 'complete'
+            ? ['status'=>200, 'body'=>json_encode(['data'=>$rows, 'current_page'=>$page, 'last_page'=>5])]
+            : response($rows);
+    }
+    if ($scan_case === 'complete') {
+        $result = $service->dispatch('recover_order', ['order_id'=>'42']);
+        check($result['stage'] === 'created' && $result['document']['document_id'] === 1 && posts() === 1, 'Exactly 500 documents can recover when metadata confirms final page');
+        continue;
+    }
+    error_is($service->dispatch('recover_order', ['order_id'=>'42']), 'recovery_scan_limit');
+    error_is($service->dispatch('create_order', ['preview_id'=>$p['preview_id']]), 'uncertain');
+    check(posts() === 1 && isset($settings_store['pmpro_fic_lock_42']) && !isset($order_meta[42][PMPro_FIC_Test_Orders::META]), 'Capped scan preserves lock and makes no association or duplicate');
+}
+foreach (['wrong_page','malformed','repeated','short_next','network'] as $case) {
+    $service = fixture(); $p = preview($service); $post_responses = [new WP_Error('timeout','ambiguous')];
+    $service->dispatch('create_order', ['preview_id'=>$p['preview_id']]);
+    $settings_store['pmpro_fic_test_order_42']['requested_at'] -= 121;
+    $doc = ['id'=>77, 'subject'=>$p['marker'], 'amount_gross'=>122];
+    $first = ['data'=>[$doc], 'current_page'=>1, 'last_page'=>2, 'next_page_url'=>'untrusted-never-followed'];
+    if ($case === 'wrong_page') $first['current_page'] = 2;
+    if ($case === 'malformed') $first['data'] = ['not-a-list'=>$doc];
+    $second = ['data'=>[], 'current_page'=>2, 'last_page'=>2];
+    if ($case === 'repeated') $second['data'] = [$doc];
+    if ($case === 'short_next') $second['data'] = [array_merge($doc,['id'=>78])];
+    $responses = [['status'=>200, 'body'=>json_encode($first)], $case === 'network' ? new WP_Error('timeout','secret') : ['status'=>200,'body'=>json_encode($second)]];
+    $expected = ['short_next'=>'ambiguous_recovery', 'network'=>'unknown_result'][$case] ?? 'recovery_pagination';
+    error_is($service->dispatch('recover_order', ['order_id'=>'42']), $expected);
+    check(posts() === 1 && isset($settings_store['pmpro_fic_lock_42']), 'Partial or changing scan cannot release the creation lock: ' . $case);
+}
 
 echo "PASS: {$checks} manual-order checks. HTTP and WordPress simulated; no external documents or payments.\n";

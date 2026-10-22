@@ -315,11 +315,11 @@ final class PMPro_FattureInCloud_Sync {
             elseif ($action === 'simulate') $result = $this->simulate_invoice($this->input($_POST, 'amount'));
             elseif (in_array($action, PMPro_FIC_Test_Orders::ACTIONS, true)) $result = $orders->dispatch($action, wp_unslash($_POST));
             elseif (in_array($action, PMPro_FIC_Automation::ACTIONS, true)) $result = $this->automation->dispatch($action, wp_unslash($_POST));
-            elseif (in_array($action, PMPro_FIC_Diagnostics::ACTIONS, true)) $result = $this->diagnostics->dispatch($action);
+            elseif (in_array($action, PMPro_FIC_Diagnostics::ACTIONS, true)) $result = $this->diagnostics->dispatch($action, wp_unslash($_POST));
             else $result = new WP_Error('invalid_action', 'Operazione non disponibile.');
         }
         echo '<div class="wrap"><h1>PMPro → Fatture in Cloud</h1>';
-        echo '<div class="notice notice-info inline"><p><strong>Modalità di collaudo.</strong> La sezione 3 crea documenti manualmente; la sezione 4 abilita la coda per i nuovi primi acquisti PayPal Sandbox. I documenti vengono creati nell’azienda di prova, nel sezionale /TEST, senza invio allo SDI o email.</p></div>';
+        echo '<div class="notice notice-info inline"><p><strong>Modalità di collaudo.</strong> La sezione 3 crea documenti manualmente; la sezione 4 abilita la coda per gli acquisti PayPal Sandbox e autorizza i singoli abbonamenti di prova per i rinnovi. I documenti vengono creati nell’azienda di prova, nel sezionale /TEST, senza invio allo SDI o email.</p></div>';
         settings_errors(self::OPTION_NAME);
         $order_action = in_array($action, PMPro_FIC_Test_Orders::ACTIONS, true);
         $auto_action = in_array($action, PMPro_FIC_Automation::ACTIONS, true);

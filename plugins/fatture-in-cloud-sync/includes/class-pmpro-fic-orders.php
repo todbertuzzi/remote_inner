@@ -4,7 +4,7 @@ if (!defined('ABSPATH')) exit;
 /** Documenti Sandbox: totali, journal e lock condivisi tra flusso manuale e coda. */
 final class PMPro_FIC_Test_Orders {
     const META = '_pmpro_fic_test_document';
-    const ACTIONS = ['load_order', 'preview_order', 'create_order', 'recover_order', 'inspect_paypal_payment', 'confirm_paypal_payment'];
+    const ACTIONS = ['load_order', 'preview_order', 'create_order', 'recover_order', 'inspect_paypal_payment', 'confirm_paypal_payment', 'inspect_initial_pair', 'confirm_initial_pair'];
     private $context;
     private $edit = [];
     private $last_order_id = '';
@@ -197,7 +197,7 @@ final class PMPro_FIC_Test_Orders {
         return $accounts;
     }
 
-    /** Solo nuovi primi acquisti con copia fiscale propria: i rinnovi sono esclusi. */
+    /** Primi acquisti o rinnovi con autorizzazione e copia fiscale propria. */
     public function automation_order(int $id, bool $require_payment = true) {
         $order = $this->load_order((string) $id, $require_payment);
         if (is_wp_error($order)) return $order;
@@ -210,7 +210,13 @@ final class PMPro_FIC_Test_Orders {
         if (!method_exists('MemberOrder', 'get_orders')) return new WP_Error('pmpro_missing', 'Aggiorna PMPro per verificare gli ordini dell’abbonamento.');
         $orders = MemberOrder::get_orders(['subscription_transaction_id' => (string) $order->subscription_transaction_id,
             'gateway' => 'paypal', 'gateway_environment' => 'sandbox', 'limit' => 2]);
-        if (!is_array($orders) || count($orders) !== 1 || (int) reset($orders)->id !== $id) {
+        if (($snapshot['origin'] ?? '') === 'renewal') {
+            $allowed = PMPro_FIC_Renewals::guard($order, get_option(PMPro_FIC_Automation::CONFIG, []));
+            if (is_wp_error($allowed)) return $allowed;
+        } elseif (($snapshot['origin'] ?? '') === 'initial_pair') {
+            $allowed = PMPro_FIC_Initial_Pair::guard($order);
+            if (is_wp_error($allowed)) return $allowed;
+        } elseif (!is_array($orders) || count($orders) !== 1 || (int) reset($orders)->id !== $id) {
             return new WP_Error('auto_first_order', 'L’abbonamento non ha un unico ordine iniziale. Verifica manualmente prima di creare il documento.');
         }
         if ($require_payment) {
@@ -278,6 +284,11 @@ final class PMPro_FIC_Test_Orders {
         $this->last_order_id = $this->text($input, 'order_id');
         $context = call_user_func($this->context);
         if (is_wp_error($context)) return $context;
+        if (in_array($action, PMPro_FIC_Initial_Pair::ACTIONS, true)) {
+            $result = PMPro_FIC_Initial_Pair::dispatch($action, $input, $context);
+            if (is_array($result) && isset($result['order_id'])) $this->last_order_id = (string) $result['order_id'];
+            return $result;
+        }
         if (in_array($action, ['inspect_paypal_payment', 'confirm_paypal_payment'], true)) {
             $recovery = new PMPro_FIC_PayPal_Recovery(function ($id) { return $this->load_order($id, false); },
                 function ($order) { return $this->order_fingerprint($order); });
@@ -325,6 +336,16 @@ final class PMPro_FIC_Test_Orders {
             if ((string) $account['id'] === $this->text($input, 'account_id')) $account_id = $account['id'];
         }
         if (!$account_id) return new WP_Error('account_required', 'Ricarica l’ordine e seleziona un conto d’incasso disponibile.');
+        $payment = PMPro_FIC_Payments::verify($order);
+        if (is_wp_error($payment)) return $payment;
+        if (($snapshot['origin'] ?? '') === 'renewal') {
+            $allowed = PMPro_FIC_Renewals::guard($order, get_option(PMPro_FIC_Automation::CONFIG, []), $payment);
+            if (is_wp_error($allowed)) return $allowed;
+        }
+        if (($snapshot['origin'] ?? '') === 'initial_pair') {
+            $allowed = PMPro_FIC_Initial_Pair::guard($order, $context, $payment);
+            if (is_wp_error($allowed)) return $allowed;
+        }
         $customer = [];
         foreach (['name', 'street', 'zip', 'city', 'province', 'tax_code', 'vat_number', 'recipient_code', 'pec'] as $field) $customer[$field] = sanitize_text_field($this->text($input, $field));
         $customer['email'] = sanitize_email($this->text($input, 'email'));
@@ -343,6 +364,7 @@ final class PMPro_FIC_Test_Orders {
         $date = current_time('Y-m-d');
         $paid_date = $this->paid_date($order);
         if (is_wp_error($paid_date)) return $paid_date;
+        if ($payment) $paid_date = wp_date('Y-m-d', PMPro_FIC_Payments::timestamp($payment['paid_at']));
         $description = $context['plan_descriptions'][(int) $order->membership_id] ?? ($context['description'] . ' — livello #' . (int) $order->membership_id);
         $payload = ['data' => [
             'type' => 'invoice', 'e_invoice' => false, 'date' => $date, 'numeration' => '/TEST',
@@ -375,7 +397,7 @@ final class PMPro_FIC_Test_Orders {
         $preview = ['stage' => 'preview', 'preview_id' => $preview_id, 'admin_id' => get_current_user_id(), 'order_id' => (int) $order->id,
             'order_code' => (string) $order->code, 'order_fingerprint' => $this->order_fingerprint($order), 'scope' => $this->scope($context),
             'company_id' => $context['company_id'], 'company_name' => $context['company_name'], 'gross' => $totals['amount_gross'], 'net' => $totals['amount_net'],
-            'vat' => $totals['amount_vat'], 'totals_verified' => true, 'preview_version' => 4, 'marker' => $marker, 'payload' => $payload];
+            'vat' => $totals['amount_vat'], 'totals_verified' => true, 'preview_version' => 5, 'payment_verified' => $payment, 'marker' => $marker, 'payload' => $payload];
         if ($persist) set_transient('pmpro_fic_preview_' . $preview_id, $preview, 15 * MINUTE_IN_SECONDS);
         return $preview;
     }
@@ -385,7 +407,7 @@ final class PMPro_FIC_Test_Orders {
         if (!preg_match('/^[a-f0-9-]{36}$/D', $id)) return new WP_Error('preview_missing', 'Rigenera l’anteprima prima della creazione.');
         $preview = get_transient('pmpro_fic_preview_' . $id);
         if (!is_array($preview) || $preview['admin_id'] !== get_current_user_id() || $preview['scope'] !== $this->scope($context)
-            || empty($preview['totals_verified']) || ($preview['preview_version'] ?? 0) !== 4) {
+            || empty($preview['totals_verified']) || ($preview['preview_version'] ?? 0) !== 5) {
             return new WP_Error('preview_expired', 'Anteprima scaduta o configurazione modificata. Ricarica l’ordine e rigenera l’anteprima.');
         }
         return $this->create_preview($preview, $context);
@@ -412,25 +434,40 @@ final class PMPro_FIC_Test_Orders {
             delete_option($lock_key);
             return is_wp_error($fresh) ? $fresh : (is_wp_error($allowed) ? $allowed : new WP_Error('order_changed', 'L’ordine è cambiato prima dell’invio. Nessun documento creato.'));
         }
+        $payment = PMPro_FIC_Payments::verify($fresh);
+        $snapshot = $this->billing_snapshot($fresh);
+        if (is_wp_error($snapshot)) { delete_option($lock_key); return $snapshot; }
+        $policy = !is_wp_error($payment) && ($snapshot['origin'] ?? '') === 'renewal'
+            ? PMPro_FIC_Renewals::guard($fresh, get_option(PMPro_FIC_Automation::CONFIG, []), $payment) : true;
+        if (!is_wp_error($payment) && ($snapshot['origin'] ?? '') === 'initial_pair') $policy = PMPro_FIC_Initial_Pair::guard($fresh, $context, $payment);
+        if (is_wp_error($payment) || is_wp_error($policy) || $payment !== ($preview['payment_verified'] ?? null)) {
+            delete_option($lock_key);
+            return is_wp_error($payment) ? $payment : (is_wp_error($policy) ? $policy : new WP_Error('payment_changed', 'L’incasso è cambiato dopo l’anteprima. Ripeti la verifica.'));
+        }
+        $reservation = PMPro_FIC_Payments::reserve($fresh, $context['company_id']);
+        if (is_wp_error($reservation)) { delete_option($lock_key); return $reservation; }
         $journal = ['status' => 'pending', 'company_id' => $context['company_id'], 'order_id' => $preview['order_id'],
-            'marker' => $preview['marker'], 'gross' => $preview['gross'], 'requested_at' => time(), 'payload' => $preview['payload']];
+            'marker' => $preview['marker'], 'gross' => $preview['gross'], 'requested_at' => time(), 'payload' => $preview['payload'],
+            'payment_verified' => $payment, 'payment_reservation' => $reservation];
         if (!$this->save_journal($preview['order_id'], $journal)) {
+            PMPro_FIC_Payments::release($reservation);
             delete_option($lock_key);
             return new WP_Error('storage', 'Impossibile registrare il tentativo in WordPress. Nessuna richiesta inviata.');
         }
         $fresh = $this->load_order((string) $preview['order_id']);
         $allowed = $guard ? $guard() : true;
+        if (!is_wp_error($fresh) && !is_wp_error($allowed) && ($snapshot['origin'] ?? '') === 'initial_pair') $allowed = PMPro_FIC_Initial_Pair::guard($fresh, $context, $payment);
         if (is_wp_error($fresh) || is_wp_error($allowed) || $this->order_fingerprint($fresh) !== $preview['order_fingerprint']) {
             $error = is_wp_error($fresh) ? $fresh : (is_wp_error($allowed) ? $allowed : new WP_Error('order_changed', 'L’ordine è cambiato prima dell’invio. Nessun documento creato.'));
             $journal['status'] = 'rejected'; $journal['last_error'] = $error->get_error_message();
-            if ($this->save_journal($preview['order_id'], $journal)) delete_option($lock_key);
+            if ($this->save_journal($preview['order_id'], $journal)) { delete_option($lock_key); PMPro_FIC_Payments::release($reservation); }
             return $error;
         }
         $response = $this->request('POST', '/c/' . $context['company_id'] . '/issued_documents', $context, $preview['payload']);
         if (is_wp_error($response)) {
             $journal['status'] = $response->get_error_code() === 'rejected' ? 'rejected' : 'uncertain';
             $journal['last_error'] = $response->get_error_message();
-            if ($this->save_journal($preview['order_id'], $journal) && $journal['status'] === 'rejected') delete_option($lock_key);
+            if ($this->save_journal($preview['order_id'], $journal) && $journal['status'] === 'rejected') { delete_option($lock_key); PMPro_FIC_Payments::release($reservation); }
             return $response;
         }
         if (empty($response['data']['id']) || !is_int($response['data']['id']) || $response['data']['id'] <= 0) {
@@ -475,14 +512,25 @@ final class PMPro_FIC_Test_Orders {
             return new WP_Error('invalid_attempt', 'Riferimento del tentativo incompleto. Verifica il documento in Fatture in Cloud; il nuovo invio resta bloccato.');
         }
         $matches = [];
-        // Piccolo account di collaudo: scansione limitata. Nessun risultato non autorizza un nuovo POST.
+        $complete = false;
+        $seen = [];
+        // Una corrispondenza entro il limite non prova l'unicità oltre il limite.
         for ($page = 1; $page <= 5; $page++) {
             $path = '/c/' . $context['company_id'] . '/issued_documents?' . http_build_query([
                 'type' => 'invoice', 'fields' => 'id,number,numeration,subject,notes,amount_gross', 'sort' => '-id', 'per_page' => 100, 'page' => $page]);
             $response = $this->request('GET', $path, $context);
             if (is_wp_error($response)) return $response;
+            if (($response['data'] && array_keys($response['data']) !== range(0, count($response['data']) - 1))
+                || count($response['data']) > 100
+                || (isset($response['current_page']) && $response['current_page'] !== $page)
+                || (isset($response['last_page']) && (!is_int($response['last_page']) || $response['last_page'] < $page))) {
+                return new WP_Error('recovery_pagination', 'La risposta della ricerca non è una pagina verificabile. Il nuovo invio resta bloccato.');
+            }
             foreach ($response['data'] as $document) {
-                if (!is_array($document) || !isset($document['id']) || !is_int($document['id']) || $document['id'] <= 0) continue;
+                if (!is_array($document) || !isset($document['id']) || !is_int($document['id']) || $document['id'] <= 0 || isset($seen[$document['id']])) {
+                    return new WP_Error('recovery_pagination', 'Elenco incompleto o modificato durante la ricerca. Ripeti solo la verifica; il nuovo invio resta bloccato.');
+                }
+                $seen[$document['id']] = true;
                 // Legacy subjects were the exact UUID marker. New subjects are shared by a plan:
                 // only the complete, bounded marker in notes may identify the attempted document.
                 $legacy_match = ($document['subject'] ?? '') === $marker;
@@ -491,8 +539,10 @@ final class PMPro_FIC_Test_Orders {
                 if ($legacy_match || $notes_match) $matches[$document['id']] = $document;
                 if (count($matches) > 1) return new WP_Error('ambiguous_recovery', 'Più documenti contengono il riferimento di questo tentativo. Verifica Fatture in Cloud prima di associarli; il nuovo invio resta bloccato.');
             }
-            if (count($response['data']) < 100) break;
+            $more = !empty($response['next_page_url']) || (isset($response['last_page']) && $response['last_page'] > $page);
+            if (!$more && (count($response['data']) < 100 || ($response['last_page'] ?? null) === $page)) { $complete = true; break; }
         }
+        if (!$complete) return new WP_Error('recovery_scan_limit', 'Scansione interrotta al limite di 500 documenti: non è possibile confermare l’assenza o l’unicità del riferimento. Nessuna associazione e nessun nuovo invio. Verifica il riferimento nelle note in Fatture in Cloud.');
         if (count($matches) === 1) return $this->record_document($journal, reset($matches), 'pmpro_fic_lock_' . $order_id);
         return new WP_Error('not_found_uncertain', 'Documento non trovato tra gli ultimi 500 documenti. Il nuovo invio resta bloccato: verifica l’account Fatture in Cloud prima di risolvere il tentativo.');
     }
@@ -513,6 +563,10 @@ final class PMPro_FIC_Test_Orders {
         $this->form_start('recover_order');
         echo '<label for="fic-recover-id">ID ordine con esito incerto</label> <input id="fic-recover-id" type="number" min="1" name="order_id" value="' . esc_attr($this->last_order_id) . '" required>';
         submit_button('Verifica esito remoto', 'secondary'); echo '</form>';
+        echo '<h3>Primo incasso presente su un altro ordine</h3><p>Usa questa verifica quando il checkout non ha ID pagamento e un secondo ordine dello stesso abbonamento contiene l’incasso.</p>';
+        $this->form_start('inspect_initial_pair');
+        echo '<label>ID checkout originale <input type="number" min="1" name="order_id" required></label>';
+        submit_button('Analizza coppia di ordini (sola lettura)', 'secondary'); echo '</form>';
         echo '<div id="fic-order-result" tabindex="-1" style="scroll-margin-top:48px">';
         $order_action = in_array($action, self::ACTIONS, true);
         if ($order_action && is_wp_error($result)) {
@@ -526,7 +580,20 @@ final class PMPro_FIC_Test_Orders {
             if ($this->edit) $result = $this->edit;
         }
         if (!is_array($result) || !$order_action) { echo '</div>'; return; }
-        if ($result['stage'] === 'payment_review') {
+        if ($result['stage'] === 'pair_review') {
+            $binding = $result['binding']; $payment = $binding['payment'];
+            echo '<h3>Checkout #' . esc_html((string) $binding['source_order_id']) . ' → incasso sull’ordine #' . esc_html((string) $binding['target_order_id']) . '</h3>';
+            echo '<p>Abbonamento: ' . esc_html($payment['subscription_id']) . '<br>ID incasso: ' . esc_html($payment['payment_id']) . '<br>Importo: ' . esc_html(number_format($payment['cents'] / 100, 2, ',', '.')) . ' EUR · Data UTC: ' . esc_html($payment['paid_at']) . '</p>';
+            echo '<p>Conferma il collegamento dei dati fiscali del checkout all’ordine con incasso. Entrambi gli ordini e i loro ID pagamento restano invariati. Non viene creata alcuna fattura. Una verifica già confermata può riprendere una copia fiscale incompleta; i riferimenti vengono ricontrollati al salvataggio.</p>';
+            $this->form_start('confirm_initial_pair');
+            echo '<input type="hidden" name="review_id" value="' . esc_attr($result['review_id']) . '">';
+            submit_button('Conferma collegamento fiscale', 'primary'); echo '</form>';
+        } elseif ($result['stage'] === 'pair_linked') {
+            echo '<div class="notice notice-success inline"><p>Checkout #' . esc_html((string) $result['source_order_id']) . ' collegato all’ordine con incasso #' . esc_html((string) $result['order_id']) . '. Usa questo ordine per il documento /TEST e, dopo averlo verificato, per autorizzare i rinnovi.</p></div>';
+            $this->form_start('load_order');
+            echo '<input type="hidden" name="order_id" value="' . esc_attr((string) $result['order_id']) . '">';
+            submit_button('Carica ordine e conti d’incasso', 'secondary'); echo '</form>';
+        } elseif ($result['stage'] === 'payment_review') {
             $payment = $result['payment'];
             echo '<h3>Pagamento verificato per l’ordine #' . esc_html((string) $result['order_id']) . '</h3>';
             echo '<p>PayPal Sandbox conferma un unico primo incasso completato, corrispondente all’importo dell’ordine.</p>';

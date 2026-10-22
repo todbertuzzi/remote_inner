@@ -1,6 +1,6 @@
 # PMPro → Fatture in Cloud: collaudo con ordini PayPal Sandbox
 
-La versione 0.5.5 comprende la verifica del collegamento, la simulazione locale
+La versione 0.6.1 comprende la verifica del collegamento, la simulazione locale
 e la creazione **manuale** di un documento da un ordine PayPal Sandbox pagato.
 Raccoglie inoltre i dati fiscali nei checkout a pagamento e ne conserva una
 copia per ordine, con separazione tra privati e aziende/professionisti.
@@ -27,6 +27,158 @@ con lo stesso testo nel flusso manuale e nella coda automatica.
 La 0.5.5 usa la descrizione del piano anche come **oggetto nell'elenco fatture
 FIC**: il riferimento tecnico resta nelle note e nel registro locale per il
 recupero degli invii incerti.
+
+## Riconciliazione assistita — 0.6.1
+
+Preparata localmente il 22 ottobre, **non ancora installata**. La sezione 3
+aggiunge «Analizza coppia di ordini (sola lettura)» e una conferma separata per
+il checkout senza ID incasso affiancato da un ordine con il primo pagamento.
+Verifica un'unica coppia Sandbox e il medesimo pagamento nelle due letture
+PayPal; conserva i dati fiscali originali e li collega all'ordine con incasso.
+Nessun ID viene spostato, nessun ordine cancellato o stato modificato.
+
+La conferma non crea fatture: il documento /TEST si prepara poi sull'ordine
+con incasso, che può successivamente autorizzare i rinnovi. La coda del
+checkout originale mostra il collegamento. La provenienza è immutabile e
+ricontrollata prima dell'invio; un salvataggio interrotto può essere ripreso
+senza sovrascrivere dati. La creazione delle righe duplicate nel gateway e i
+report PMPro restano invariati. Sono ammesse solo coppie di esattamente due
+ordini, prima di ulteriori rinnovi o tentativi FIC.
+
+**1.558 controlli locali superati**, inclusi 207 per questa riconciliazione,
+con WordPress/API simulati e SQL su SQLite; PHP CLI 8.4.1. Nessuna operazione
+remota di pagamento o creazione documento eseguita. Collaudo reale PHP 8.3 e
+MySQL ancora necessario. Eseguire anche `php plugins/fatture-in-cloud-sync/tests/initial-pair.php`.
+
+Per gli ordini 63 e 65: [COLLAUDO-0.6.1.md](COLLAUDO-0.6.1.md).
+
+## Rinnovi Sandbox — 0.6.0, preparata il 22 ottobre 2026
+
+**Installazione 0.6.0 confermata dall’utente il 22 ottobre.** Piano di prova
+creato; documenti associati agli ordini 62 e 67. I checkout 63 e 65 presentano
+un primo incasso su un altro ordine: usare la guida 0.6.1. Il rinnovo giornaliero
+effettivo resta da collaudare. Cron esterno già confermato, da conservare.
+
+La sezione 4 permette ora di autorizzare **un singolo abbonamento di prova**
+tramite l'ID del suo ordine iniziale, dopo averne verificato il documento /TEST.
+L'aggiornamento non abilita automaticamente i rinnovi dei piani esistenti.
+Gli hook di salvataggio e `pmpro_subscription_payment_completed` acquisiscono
+gli ordini pagati dell'abbonamento autorizzato, senza API negli hook. Ogni
+rinnovo riceve una copia fiscale propria, derivata dai dati esplicitamente
+confermati dell'ordine iniziale: il profilo corrente non viene letto e le
+copie precedenti non cambiano. Provenienza e autorizzazione sono persistenti.
+La coda indica **Acquisto** oppure **Rinnovo** e mantiene i ritentativi limitati.
+
+Prima di ogni nuovo documento del gateway `paypal`, anche con ID già presente,
+il plugin legge la sale in PayPal Sandbox e verifica ID, abbonamento, stato,
+importo EUR al centesimo e data. Ripete il GET prima del POST e usa la data
+effettiva dell'incasso. I rinnovi antecedenti all'autorizzazione sono esclusi;
+quelli notificati in ritardo sono ammessi se pagati dopo l'autorizzazione.
+Un rinnovo senza ID non usa il recupero del primo incasso. I flussi manuali
+legacy `paypalexpress`/`paypalstandard` conservano i controlli precedenti.
+
+Ogni nuovo POST, manuale o automatico, prenota l'incasso tramite **INSERT IGNORE**
+sull'indice univoco `option_name` di WordPress, con rilettura SQL diretta. Il
+vincolo non dipende dall'azienda FIC o dalle credenziali: cambiandole non si
+libera l'incasso. Una seconda prenotazione protegge il tentativo concorrente,
+anche sullo stesso ordine. Successo o esito incerto la mantengono; solo un
+arresto prima del POST o un rifiuto remoto certo permettono di liberare quel
+tentativo. Il proprietario dell'incasso resta permanente. Non si usa
+`add_option()` per queste prenotazioni, perché il suo upsert può sovrascrivere
+un valore concorrente. I lock preesistenti restano come ulteriore controllo;
+la nuova garanzia sull'invio dipende dalle prenotazioni SQL, condivise dai flussi.
+
+Le associazioni esistenti vengono riutilizzate. Vecchie anteprime devono essere
+rigenerate; impostazioni, cron e documenti non richiedono migrazioni distruttive.
+Non vengono creati piani, effettuati nuovi addebiti o inviati documenti allo SDI
+durante l'installazione. I documenti FIC /TEST sono reali nell'azienda di prova.
+
+**Limiti di questa fase:** nessuna revisione automatica dei dati fiscali, nessuna
+importazione storica, nessuna riattivazione/migrazione automatica di autorizzazioni
+sospese o con configurazione cambiata. Per questi casi fermare la fatturazione
+e valutare la revisione prima della produzione; non cancellare le prenotazioni.
+La lettura delle sale usa l'endpoint Payments v1 documentato da PayPal come
+deprecato: è il tipo di risorsa degli eventi `PAYMENT.SALE.COMPLETED` dell'addon,
+non una capture Orders v2. La disponibilità per l'app Sandbox installata va
+verificata sul sito; errori o risposte incomplete bloccano/ritentano le sole letture.
+Restano anche il limite di recupero FIC a 500 documenti e il monitoraggio dei
+soli 20 lavori recenti (gli altri sono consultabili tramite ID).
+
+**Test locali: 1.351 controlli superati** con PHP CLI 8.4.1: 1.072 delle suite
+esistenti, 223 per rinnovi/incassi e 56 per concorrenza. Due gruppi di otto
+processi PHP competono su SQLite condiviso: un solo permesso di invio per
+incasso. WordPress, PayPal, FIC e cron sono simulati; SQLite non certifica
+WordPress/MySQL né la compatibilità effettiva del server PHP 8.3. Nessuna API
+remota autenticata, fattura, email o operazione di pagamento eseguita nei test.
+
+Eseguire le suite precedenti, più:
+
+```sh
+php plugins/fatture-in-cloud-sync/tests/renewals.php
+php plugins/fatture-in-cloud-sync/tests/payment-concurrency.php
+```
+
+Installazione e sequenza sul sito: [COLLAUDO-0.6.0.md](COLLAUDO-0.6.0.md).
+Le sezioni successive descrivono anche le versioni precedenti; le esclusioni
+storiche dei rinnovi sono superate solo per gli abbonamenti autorizzati in 0.6.0.
+
+## Affidabilità — 0.5.6, preparata il 21 ottobre 2026
+
+La coda ora ritenta anche le risposte PayPal prive di un elenco utilizzabile,
+con lo stesso limite di sei elaborazioni; i dati non verificabili non vengono
+associati. Nella sezione 5 sono disponibili il confronto in sola lettura di
+un ordine esistente (date `Z` / `+00:00`) e una prova cron dedicata che registra
+l'esecuzione senza richiamare il worker delle fatture. La diagnostica non
+costruisce oggetti `MemberOrder` e distingue il risultato decodificato dal
+gateway dagli esiti HTTP osservati nel registro passivo.
+
+Il recupero FIC segnala ora esplicitamente una scansione troncata a 500
+documenti, senza associare neppure una corrispondenza apparentemente unica.
+Pagine successive dichiarate dall'API, pagine incoerenti e ID ripetuti sono
+gestiti senza liberare la protezione dai duplicati. Una ricerca negativa
+continua a non autorizzare un nuovo POST.
+
+**Installazione 0.5.6 e confronto PayPal sull'ordine 56 confermati** dal riscontro
+dell'utente e dal registro del 21 ottobre, ore 14:23 italiane: entrambe le
+forme delle date restituiscono HTTP 200 e lo stesso incasso `COMPLETED` da
+841,80 EUR. L'ordine risulta `success`, con ID incasso presente. Questo test
+non verifica i nuovi ritentativi, il recupero FIC o il cron sul server.
+Le impostazioni restano valide se non vengono modificate; la loro conservazione
+completa non è oggetto del log PayPal. Non sono stati ripetuti gli acquisti
+Gold/Professional già verificati. La causa storica PayPal resta aperta.
+L'utente ha confermato il piano OVH **Performance**, PHP 8.3, la presenza di
+`www/wp-cron.php` via FTP e la creazione del cron OVH dopo le istruzioni per
+la frequenza oraria. La prova dedicata è stata eseguita alle **13:38:25 UTC**
+del 21 ottobre, 48 secondi dopo la scadenza; l'utente l'ha rilevata con un
+refresh dopo circa venti minuti. Il successivo log OVH documenta START/END
+alle 16:00 con exitcode 0, ma usa **PHP 8.5**: il task va allineato a PHP 8.3.
+Quel log non attribuisce a OVH la precedente prova delle 15:38 italiane.
+Una seconda prova riferita dall'utente risulta eseguita alle **14:22:50 UTC**,
+con scadenza **14:10:47 UTC** (ritardo 12 minuti e 3 secondi); mancano ancora
+le righe OVH corrispondenti e la conferma del nuovo interprete PHP nel log.
+Regolarità ed esecuzione della prova durante un avvio OVH restano da verificare;
+nessuna configurazione remota è stata applicata direttamente dall'assistente.
+
+Il **22 ottobre** l'utente ha iniziato a configurare cron-job.org. Gli header
+della richiesta mostrano PHP 8.3; la nuova prova del plugin risulta eseguita
+alle **07:18:02 UTC**, con scadenza **07:16:29 UTC** (93 secondi).
+È un tempo compatibile con la frequenza proposta di due minuti. Una successiva
+prova, scaduta alle **07:36:35 UTC**, è eseguita alle **07:40:21 UTC**
+(3 minuti e 46 secondi). L'utente conferma HTTP 200 da cron-job.org con header
+Date **07:40:17 GMT** e PHP 8.3: corrispondenza coerente con l'avvio esterno.
+L'utente ha chiarito di aver portato l'intervallo a **5 minuti**, compatibile
+con il ritardo osservato; l'intervallo di due minuti resta quello proposto
+per l'obiettivo iniziale, non quello confermato per quest'ultima prova.
+Successivamente l'utente ha riferito esito positivo della prova finale e
+confermato la configurazione completata: **cron-job.org ogni due minuti**,
+notifiche errori abilitate, **DISABLE_WP_CRON=true**, **task OVH sospeso**.
+La verifica operativa del cron è conclusa sulla base della conferma dell'utente;
+nuovi timestamp della prova finale non sono stati forniti. La regolarità nel
+tempo resta da monitorare. Nessuna modifica remota è stata eseguita dall'assistente.
+
+La [guida di collaudo 0.5.6](COLLAUDO-0.5.6.md) contiene i passi sull'ordine 56,
+le alternative cron, il registro degli esiti e i limiti ancora aperti prima
+dei rinnovi. Per questa verifica iniziale non serve un nuovo acquisto.
 
 ## Collaudo Professional e Gold — 21 ottobre 2026
 
@@ -1096,6 +1248,22 @@ sito prima della produzione. Gli incassi di questa fase rappresentano
 pagamenti Sandbox, non reali.
 
 ## Verifica locale
+
+La **0.5.6** supera **1072 controlli locali** con PHP CLI 8.4.1:
+91 collegamento/configurazione, 182 documenti manuali, 68 checkout,
+170 recupero manuale, 200 automazione, 8 accessi, 177 recupero in coda e
+176 diagnostica. Sintassi valida per tutti i file PHP del plugin e dei test.
+I nuovi casi coprono risposta incompleta seguita da successo o esaurimento
+dei tentativi, scansione troncata con/senza marker, esattamente 500 documenti
+con fine elenco dichiarata, pagine incoerenti/modificate, confronto delle
+date senza costruttori PMPro, accessi/nonce e prova cron dedicata.
+WordPress, cron, gateway e HTTP sono simulati; l'aggiornamento SQL continua
+a essere provato su SQLite, non su MySQL. Questi risultati non certificano
+l'installazione remota o l'esecuzione concorrente su processi WordPress reali.
+
+Lo ZIP di installazione 0.5.6 contiene codice, asset, README e guida di collaudo;
+le suite restano nel repository locale e non sono incluse nel pacchetto da
+pubblicare sul server.
 
 `php plugins/fatture-in-cloud-sync/tests/connection-and-simulation.php`
 

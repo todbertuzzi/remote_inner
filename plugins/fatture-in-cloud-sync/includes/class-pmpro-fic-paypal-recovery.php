@@ -30,6 +30,9 @@ final class PMPro_FIC_PayPal_Recovery {
         if (!preg_match('/^I-[A-Z0-9]{5,32}$/D', (string) $order->subscription_transaction_id)) {
             return new WP_Error('paypal_recovery_subscription', 'Nell’ordine manca un ID abbonamento PayPal valido.');
         }
+        $linked = PMPro_FIC_Initial_Pair::source_link((int) $order->id);
+        if (is_wp_error($linked)) return $linked;
+        if ($linked !== null) return new WP_Error('paypal_recovery_linked', 'Checkout già collegato all’ordine #' . $linked . '. Usa quell’ordine per il documento.');
         $snapshot = PMPro_FIC_Billing::snapshot((int) $order->id);
         if (!$snapshot || is_wp_error($snapshot) || (int) $snapshot['user_id'] !== (int) $order->user_id
             || (int) $snapshot['level_id'] !== (int) $order->membership_id || $snapshot['currency'] !== 'EUR') {
@@ -68,8 +71,22 @@ final class PMPro_FIC_PayPal_Recovery {
         return (int) $parts[1] * 100 + (int) str_pad($parts[2] ?? '', 2, '0');
     }
 
+    /** Lettura del primo incasso per la riconciliazione assistita; nessun costruttore MemberOrder. */
+    public function inspect_first_payment($order) {
+        if (!current_user_can('manage_options')) return new WP_Error('forbidden', 'Operazione riservata agli amministratori.');
+        if (!is_object($order) || ($order->gateway ?? '') !== 'paypal' || ($order->gateway_environment ?? '') !== 'sandbox'
+            || get_option('pmpro_gateway_environment', '') !== 'sandbox'
+            || !preg_match('/^I-[A-Z0-9]{5,32}$/D', (string) ($order->subscription_transaction_id ?? ''))
+            || !class_exists('PMPro_PayPal_API') || !method_exists('PMPro_PayPal_API', 'get_subscription')
+            || !method_exists('PMPro_PayPal_API', 'get_subscription_transactions')
+            || !get_option('pmpro_paypal_client_id_sandbox', '') || !get_option('pmpro_paypal_client_secret_sandbox', '')) {
+            return new WP_Error('pair_gateway', 'Servono ordine e credenziali PayPal Sandbox validi.');
+        }
+        return $this->first_payment($order);
+    }
+
     /** Legge risorse PayPal; nessuna cattura, rimborso o ripetizione di webhook. */
-    private function verify($order) {
+    private function first_payment($order) {
         $api = new PMPro_PayPal_API();
         $subscription_id = (string) $order->subscription_transaction_id;
         $subscription = $api->get_subscription($subscription_id);
@@ -94,7 +111,7 @@ final class PMPro_FIC_PayPal_Recovery {
         $end = $created + 3600;
         $response = $api->get_subscription_transactions($subscription_id, gmdate('Y-m-d\TH:i:s\Z', $start), gmdate('Y-m-d\TH:i:s\Z', $end));
         if (is_wp_error($response)) return new WP_Error('paypal_recovery_api', 'Impossibile leggere i pagamenti da PayPal Sandbox. Nessun ID aggiornato.');
-        if (!is_array($response) || !is_array($response['transactions'] ?? null)) return new WP_Error('paypal_recovery_response', 'PayPal non ha restituito un elenco di pagamenti valido.');
+        if (!is_array($response) || !is_array($response['transactions'] ?? null)) return new WP_Error('paypal_recovery_incomplete', 'PayPal non ha restituito un elenco di pagamenti utilizzabile. Nessun ID aggiornato; la coda riprova con un numero limitato di tentativi.');
         $rows = $response['transactions'];
         if ((isset($response['total_pages']) && (!is_int($response['total_pages']) || $response['total_pages'] < 0 || $response['total_pages'] > 1
                 || (count($rows) > 0 && $response['total_pages'] === 0)))
@@ -128,6 +145,12 @@ final class PMPro_FIC_PayPal_Recovery {
         if ($payment['currency'] !== 'EUR' || $payment['cents'] !== (int) round((float) $order->total * 100)) {
             return new WP_Error('paypal_recovery_amount', 'Importo o valuta del pagamento PayPal non corrispondono all’ordine PMPro.');
         }
+        return $payment;
+    }
+
+    private function verify($order) {
+        $payment = $this->first_payment($order);
+        if (is_wp_error($payment)) return $payment;
         $other = MemberOrder::get_orders(['payment_transaction_id' => $payment['payment_id'], 'gateway_environment' => 'sandbox', 'limit' => 2]);
         if (is_array($other) && count($other) === 1 && (int) reset($other)->id === (int) $order->id) {
             return new WP_Error('payment_present', 'Il gateway ha già associato l’ID pagamento durante la verifica. Ricarica l’ordine.');

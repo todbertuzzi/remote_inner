@@ -1,12 +1,12 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
-/** Coda opt-in per nuovi primi acquisti Sandbox. Nessuna chiamata FIC nei webhook. */
+/** Coda opt-in per acquisti e rinnovi autorizzati Sandbox. Nessuna API nei nuovi hook rinnovi. */
 final class PMPro_FIC_Automation {
     const CONFIG = 'pmpro_fic_automation';
     const INDEX = 'pmpro_fic_automation_recent';
     const HOOK = 'pmpro_fic_process_order';
-    const ACTIONS = ['auto_accounts', 'auto_enable', 'auto_pause', 'auto_retry', 'auto_run', 'auto_status'];
+    const ACTIONS = ['auto_accounts', 'auto_enable', 'auto_pause', 'auto_retry', 'auto_run', 'auto_status', 'renewal_enable', 'renewal_status', 'renewal_pause', 'renewal_enqueue'];
     private $plugin;
 
     public function __construct(PMPro_FattureInCloud_Sync $plugin) {
@@ -14,6 +14,7 @@ final class PMPro_FIC_Automation {
         add_action('pmpro_added_order', [$this, 'on_new_order'], 40);
         add_action('pmpro_updated_order', [$this, 'on_updated_order'], 40);
         add_action('pmpro_after_checkout', [$this, 'after_checkout'], 40, 2);
+        add_action('pmpro_subscription_payment_completed', [$this, 'on_renewal'], 40);
         add_action(self::HOOK, [$this, 'process'], 10, 1);
     }
 
@@ -53,9 +54,9 @@ final class PMPro_FIC_Automation {
         return $this->job((int) $job['order_id']) === $job;
     }
 
-    private function source($order) {
+    private function source($order, bool $reload = true) {
         if (!is_object($order) || empty($order->id) || !class_exists('MemberOrder')) return false;
-        $order = new MemberOrder((int) $order->id);
+        if ($reload) $order = new MemberOrder((int) $order->id);
         if (empty($order->id) || $order->gateway !== 'paypal' || $order->gateway_environment !== 'sandbox'
             || !in_array($order->status, ['token', 'pending', 'success'], true) || !is_numeric($order->total)
             || !is_finite((float) $order->total) || (float) $order->total <= 0 || (float) $order->total > 9999999.99) return false;
@@ -85,14 +86,29 @@ final class PMPro_FIC_Automation {
 
     public function on_new_order($order): void {
         $config = $this->enabled();
-        if (is_wp_error($config) || !($order = $this->source($order))) return;
+        if (is_wp_error($config) || !is_object($order) || empty($order->id)) return;
+        if (!PMPro_FIC_Billing::snapshot((int) $order->id)) {
+            if (($order->status ?? '') !== 'success' || empty($order->payment_transaction_id)) return;
+            $captured = PMPro_FIC_Renewals::capture($order, $config);
+            if (is_wp_error($captured)) {
+                update_option('pmpro_fic_renewal_error', 'Ordine #' . (int) $order->id . ': ' . $captured->get_error_message(), false);
+                return;
+            }
+        }
+        // Negli hook usiamo l'oggetto appena salvato: il costruttore PMPro può sincronizzare il gateway.
+        if (!($order = $this->source($order, false))) return;
+        $snapshot = PMPro_FIC_Billing::snapshot((int) $order->id);
+        $renewal = ($snapshot['origin'] ?? '') === 'renewal';
+        if ($renewal && is_wp_error(PMPro_FIC_Renewals::guard($order, $config))) return;
         $id = (int) $order->id;
         // L'ordine iniziale viene salvato prima che PayPal assegni l'ID abbonamento.
         $job = ['order_id' => $id, 'state' => 'queued', 'attempts' => 0, 'generation' => $config['generation'],
             'scope' => $config['scope'], 'context_scope' => $config['context_scope'], 'company_id' => $config['company_id'],
             'account_id' => $config['account_id'], 'identity' => $this->identity($order),
-            'recover_missing_payment' => !empty($config['recover_missing_payment']),
-            'subscription_id' => (string) $order->subscription_transaction_id, 'created_at' => time(), 'updated_at' => time(), 'message' => 'In attesa della conferma del primo pagamento.'];
+            'recover_missing_payment' => !$renewal && !empty($config['recover_missing_payment']),
+            'kind' => $renewal ? 'renewal' : 'checkout', 'payment_id' => $renewal ? (string) $order->payment_transaction_id : '',
+            'subscription_id' => (string) $order->subscription_transaction_id, 'created_at' => time(), 'updated_at' => time(),
+            'message' => $renewal ? 'Rinnovo in attesa della verifica dell’incasso PayPal.' : 'In attesa della conferma del primo pagamento.'];
         if (!add_option($this->key($id), $job, '', false)) return;
         $index = get_option(self::INDEX, []);
         $index = is_array($index) ? $index : [];
@@ -106,8 +122,9 @@ final class PMPro_FIC_Automation {
     public function on_updated_order($order): void {
         if (!is_object($order) || empty($order->id)) return;
         $job = $this->job((int) $order->id);
+        if (!$job) { $this->on_renewal($order); return; }
         if (!$job || !in_array($job['state'], ['queued', 'waiting'], true) || is_wp_error($this->enabled())) return;
-        if ($this->source($order) && $this->identity($order) === $job['identity'] && empty($job['subscription_id']) && !empty($order->subscription_transaction_id)) {
+        if ($this->source($order, false) && $this->identity($order) === $job['identity'] && empty($job['subscription_id']) && !empty($order->subscription_transaction_id)) {
             $job['subscription_id'] = (string) $order->subscription_transaction_id;
             $this->save($job);
         }
@@ -116,16 +133,32 @@ final class PMPro_FIC_Automation {
 
     public function after_checkout($user_id, $order): void { $this->on_updated_order($order); }
 
+    public function on_renewal($order): void {
+        if (!is_object($order) || empty($order->id) || ($order->status ?? '') !== 'success'
+            || empty($order->payment_transaction_id) || $this->job((int) $order->id)) return;
+        $policy = PMPro_FIC_Renewals::policy($order);
+        if (!is_array($policy) || $policy['source_order_id'] === (int) $order->id) return;
+        $this->on_new_order($order);
+    }
+
     private function guard(array $job) {
+        $linked = PMPro_FIC_Initial_Pair::source_link((int) $job['order_id']);
+        if (is_wp_error($linked)) return $linked;
+        if ($linked !== null) return new WP_Error('auto_initial_linked', 'Checkout collegato all’ordine con incasso #' . $linked . '. Usa quell’ordine per il documento.');
         $config = $this->enabled();
         if (is_wp_error($config)) return $config;
         foreach (['generation', 'scope', 'context_scope', 'company_id', 'account_id'] as $key) {
             if (($job[$key] ?? null) !== ($config[$key] ?? null)) return new WP_Error('auto_config_changed', 'La configurazione della coda è cambiata. Verifica il lavoro prima di riprovarlo.');
         }
-        if (!empty($job['recover_missing_payment']) !== !empty($config['recover_missing_payment'])) {
+        if (($job['kind'] ?? '') !== 'renewal' && !empty($job['recover_missing_payment']) !== !empty($config['recover_missing_payment'])) {
             return new WP_Error('auto_config_changed', 'L’autorizzazione al recupero PayPal è cambiata. Verifica il lavoro prima di riprovarlo.');
         }
         $order = new MemberOrder((int) $job['order_id']);
+        if (($job['kind'] ?? '') === 'renewal') {
+            $allowed = PMPro_FIC_Renewals::guard($order, $config);
+            if (is_wp_error($allowed)) return $allowed;
+            if (($job['payment_id'] ?? '') !== (string) $order->payment_transaction_id) return new WP_Error('auto_order_changed', 'L’ID incasso del rinnovo è cambiato.');
+        }
         if (!$this->source($order) || $this->identity($order) !== $job['identity']
             || (!empty($job['subscription_id']) && $job['subscription_id'] !== (string) $order->subscription_transaction_id)) {
             return new WP_Error('auto_order_changed', 'L’ordine o i dati fiscali sono cambiati. Verifica manualmente.');
@@ -153,6 +186,7 @@ final class PMPro_FIC_Automation {
                 $this->retry_later($job, 'In attesa della conferma del pagamento in PMPro.'); return;
             }
             if (trim((string) $order->payment_transaction_id) === '') {
+                if (($job['kind'] ?? '') === 'renewal') { $this->finish_error($job, new WP_Error('renewal_payment', 'ID incasso mancante: il recupero del primo pagamento non si applica ai rinnovi.')); return; }
                 if (empty($job['recover_missing_payment'])) {
                     $this->retry_later($job, 'Ordine pagato in PMPro, ma ID incasso mancante. Il recupero automatico PayPal è disattivato.'); return;
                 }
@@ -205,11 +239,12 @@ final class PMPro_FIC_Automation {
     private function finish_error(array $job, WP_Error $error): void {
         $journal = get_option('pmpro_fic_test_order_' . $job['order_id'], []);
         $code = $error->get_error_code();
-        $uncertain = in_array($code, ['uncertain', 'locked', 'storage_uncertain', 'metadata', 'paypal_recovery_storage', 'paypal_recovery_query', 'paypal_recovery_readback'], true)
+        $uncertain = in_array($code, ['uncertain', 'locked', 'payment_locked', 'payment_storage', 'storage_uncertain', 'metadata', 'paypal_recovery_storage', 'paypal_recovery_query', 'paypal_recovery_readback'], true)
             || (is_array($journal) && in_array($journal['status'] ?? '', ['pending', 'uncertain', 'created', 'created_mismatch'], true));
         // Ritenta solo letture/preflight falliti o un POST esplicitamente rifiutato con 429.
         $retry = !$uncertain && (in_array($code, ['connection', 'api_429', 'api_500', 'api_502', 'api_503', 'api_504', 'unknown_result', 'transaction_missing',
-                'paypal_recovery_api', 'paypal_recovery_not_found', 'paypal_recovery_changed', 'paypal_recovery_locked', 'payment_present'], true)
+                'paypal_recovery_api', 'paypal_recovery_incomplete', 'paypal_recovery_not_found', 'paypal_recovery_changed', 'paypal_recovery_locked', 'payment_present',
+                'payment_api', 'payment_incomplete', 'payment_pending', 'payment_changed'], true)
             || ($code === 'totals_error' && !preg_match('/HTTP (400|401|403|404|422)\./', $error->get_error_message()))
             || ($code === 'rejected' && strpos($error->get_error_message(), 'HTTP 429.') !== false));
         if ($retry) { $this->retry_later($job, $error->get_error_message()); return; }
@@ -222,6 +257,34 @@ final class PMPro_FIC_Automation {
 
     public function dispatch(string $action, array $input) {
         if (!current_user_can('manage_options')) return new WP_Error('forbidden', 'Operazione riservata agli amministratori.');
+        if (in_array($action, ['renewal_enable', 'renewal_status', 'renewal_pause', 'renewal_enqueue'], true)) {
+            $id = $this->field($input, 'order_id');
+            if (!preg_match('/^[1-9][0-9]{0,9}$/D', $id) || !class_exists('MemberOrder')) return new WP_Error('invalid_order', 'Inserisci l’ID numerico dell’ordine.');
+            $order = new MemberOrder((int) $id);
+            if (empty($order->id)) return new WP_Error('order_missing', 'Ordine non trovato.');
+            $policy = PMPro_FIC_Renewals::policy($order);
+            if (is_wp_error($policy)) return $policy;
+            if ($action === 'renewal_pause') {
+                if (!$policy) return new WP_Error('renewal_policy', 'Abbonamento non autorizzato.');
+                update_option(PMPro_FIC_Renewals::key($policy['subscription_id']) . '_paused', true, false);
+                return get_option(PMPro_FIC_Renewals::key($policy['subscription_id']) . '_paused', false)
+                    ? ['message' => 'Fatturazione dei rinnovi sospesa per questo abbonamento. Gli addebiti PayPal non vengono modificati.']
+                    : new WP_Error('storage', 'Impossibile sospendere l’autorizzazione.');
+            }
+            if ($action === 'renewal_status') return ['message' => $policy
+                ? 'Abbonamento ' . $policy['subscription_id'] . ' · copia fiscale ordine #' . $policy['source_order_id'] . ' · incassi dal ' . gmdate('Y-m-d H:i:s', $policy['effective_from']) . ' UTC · '
+                    . (get_option(PMPro_FIC_Renewals::key($policy['subscription_id']) . '_paused', false) ? 'Sospeso' : 'Autorizzato (richiede automazione attiva e configurazione invariata).')
+                : 'Nessuna autorizzazione ai rinnovi per questo abbonamento.'];
+            $config = $this->enabled();
+            if (is_wp_error($config)) return $config;
+            if ($action === 'renewal_enqueue') {
+                $this->on_renewal($order);
+                return $this->job((int) $id) ? ['message' => 'Ordine presente in coda. Consulta il suo stato prima di riprovare.']
+                    : new WP_Error('renewal_ineligible', 'Rinnovo non acquisito: verifica autorizzazione, copia fiscale, stato e ID incasso.');
+            }
+            if ($this->field($input, 'confirm_renewal') !== '1') return new WP_Error('confirm_test', 'Conferma abbonamento di prova e validità dei dati fiscali per i rinnovi.');
+            return PMPro_FIC_Renewals::authorize($order, $config);
+        }
         if ($action === 'auto_pause') { $this->invalidate(); return ['message' => 'Automazione disattivata. I lavori già in corso vanno verificati.']; }
         if (in_array($action, ['auto_accounts', 'auto_enable'], true)) {
             if (get_option('pmpro_gateway', '') !== 'paypal' || get_option('pmpro_gateway_environment', '') !== 'sandbox'
@@ -255,6 +318,9 @@ final class PMPro_FIC_Automation {
         }
         $id = $this->field($input, 'order_id');
         if (!preg_match('/^[1-9][0-9]{0,9}$/D', $id)) return new WP_Error('invalid_order', 'Inserisci l’ID numerico dell’ordine.');
+        $linked = PMPro_FIC_Initial_Pair::source_link((int) $id);
+        if (is_wp_error($linked)) return $linked;
+        if ($linked !== null) return ['message' => 'Checkout collegato all’ordine con incasso #' . $linked . '. Usa la sezione 3 per completare la riconciliazione e il documento.'];
         $job = $this->job((int) $id);
         if (!$job) return new WP_Error('auto_no_job', 'Ordine non presente in coda. L’attivazione non importa gli ordini precedenti.');
         if ($action === 'auto_retry') {
@@ -280,7 +346,7 @@ final class PMPro_FIC_Automation {
             if ($job['state'] === 'created') return ['message' => 'Documento già associato. Nessun nuovo invio.'];
             $journal = get_option('pmpro_fic_test_order_' . $id, []);
             if ($journal && in_array($journal['status'] ?? '', ['pending', 'uncertain'], true)) return new WP_Error('uncertain', 'Esito remoto incerto. Usa Verifica esito remoto nella sezione 3.');
-            $job['generation'] = $config['generation']; $job['recover_missing_payment'] = !empty($config['recover_missing_payment']);
+            $job['generation'] = $config['generation']; $job['recover_missing_payment'] = ($job['kind'] ?? '') !== 'renewal' && !empty($config['recover_missing_payment']);
             $job['state'] = 'queued'; $job['attempts'] = 0; $job['message'] = 'Nuova elaborazione richiesta dall’amministratore.';
             if (!$this->save($job)) return new WP_Error('storage', 'Impossibile salvare il lavoro.');
             if (!$this->schedule((int) $id, 1)) return new WP_Error('auto_schedule', 'Impossibile programmare il lavoro. Verifica WP-Cron.');
@@ -300,7 +366,7 @@ final class PMPro_FIC_Automation {
 
     public function render($result, string $action): void {
         echo '<hr><h2>4. Automazione PayPal Sandbox</h2><div id="fic-auto-result" tabindex="-1" style="scroll-margin-top:48px">';
-        echo '<p>Crea un documento /TEST per i nuovi primi acquisti di abbonamenti dopo la conferma del pagamento, usando i dati fiscali del checkout. Rinnovi e ordini precedenti restano da gestire manualmente. L’elaborazione usa WP-Cron: il tempo dipende dalle visite al sito e dalla configurazione del server.</p>';
+        echo '<p>Crea un documento /TEST per i nuovi acquisti e per i rinnovi degli abbonamenti autorizzati qui sotto. Verifica gli incassi PayPal prima dell’invio. L’elaborazione usa WP-Cron e dipende dalla frequenza dello scheduler.</p>';
         $config = $this->config();
         $enabled = $this->enabled();
         echo '<p><strong>Stato:</strong> ' . esc_html(is_wp_error($enabled) ? $enabled->get_error_message() : 'Attiva — ' . $config['company_name'] . ' — conto #' . $config['account_id']) . '</p>';
@@ -322,12 +388,27 @@ final class PMPro_FIC_Automation {
             submit_button('Attiva automazione Sandbox', 'primary'); echo '</form>';
         }
         if (!empty($config['active'])) { $this->form('auto_pause'); submit_button('Disattiva automazione', 'secondary'); echo '</form>'; }
+        echo '<h3>Rinnovi di un abbonamento Sandbox</h3><p>Prima completa il primo acquisto su un piano dedicato al collaudo e verifica i dati fiscali nel suo documento /TEST in Fatture in Cloud: saranno copiati in ogni rinnovo, senza leggere il profilo corrente. L’autorizzazione vale solo per gli incassi successivi e non importa lo storico. In caso di variazioni fiscali sospendi l’autorizzazione; questa versione non modifica la copia confermata.</p>';
+        $this->form('renewal_enable');
+        echo '<p><label>ID ordine iniziale <input type="number" min="1" name="order_id" required></label></p><p><label><input type="checkbox" name="confirm_renewal" value="1" required> Confermo che questo è un abbonamento di prova e che i suoi dati fiscali sono validi anche per i rinnovi.</label></p>';
+        submit_button('Autorizza rinnovi di questo abbonamento', 'secondary'); echo '</form>';
+        foreach (['renewal_status' => 'Controlla autorizzazione', 'renewal_pause' => 'Sospendi fatturazione rinnovi', 'renewal_enqueue' => 'Acquisisci un rinnovo già pagato'] as $operation => $label) {
+            $this->form($operation); echo '<p><label>ID ordine ' . ($operation === 'renewal_enqueue' ? 'di rinnovo' : 'dell’abbonamento') . ' <input type="number" min="1" name="order_id" required></label></p>';
+            submit_button($label, 'secondary'); echo '</form>';
+        }
+        $capture_error = get_option('pmpro_fic_renewal_error', '');
+        if (is_string($capture_error) && $capture_error !== '') echo '<p>Ultimo problema di acquisizione (storico): ' . esc_html($capture_error) . '</p>';
         echo '<h3>Ultimi 20 ordini in coda</h3><table class="widefat striped"><thead><tr><th>Ordine</th><th>Esito</th><th>Tentativi</th><th>Documento FIC</th><th>Azioni</th></tr></thead><tbody>';
         $labels = ['queued'=>'In coda', 'waiting'=>'In attesa', 'processing'=>'In elaborazione', 'created'=>'Documento associato', 'blocked'=>'Da correggere', 'attention'=>'Da verificare'];
         foreach (get_option(self::INDEX, []) ?: [] as $id) {
             $job = $this->job((int) $id);
             if (!$job) continue;
-            echo '<tr><td>#' . esc_html((string) $id) . '</td><td>' . esc_html($labels[$job['state']] ?? $job['state']) . '<br>' . esc_html($job['message'])
+            $linked = PMPro_FIC_Initial_Pair::source_link((int) $id);
+            if (is_int($linked)) {
+                echo '<tr><td>#' . esc_html((string) $id) . ' · Checkout</td><td>Collegamento confermato<br>Incasso sull’ordine #' . esc_html((string) $linked) . '. Completa la riconciliazione e il documento nella sezione 3.</td><td>' . esc_html((string) $job['attempts']) . '</td><td>Vedi ordine #' . esc_html((string) $linked) . '</td><td>Non recuperare l’ID su questo checkout.</td></tr>';
+                continue;
+            }
+            echo '<tr><td>#' . esc_html((string) $id) . (($job['kind'] ?? '') === 'renewal' ? ' · Rinnovo' : ' · Acquisto') . '</td><td>' . esc_html($labels[$job['state']] ?? $job['state']) . '<br>' . esc_html($job['message'])
                 . '</td><td>' . esc_html((string) $job['attempts']) . '</td><td>' . esc_html((string) ($job['document_id'] ?? '')) . '</td><td>';
             if (!empty($job['payment_recovered'])) echo '<p>ID incasso recuperato: ' . esc_html($job['payment_id']) . '</p>';
             if (in_array($job['state'], ['queued', 'waiting'], true)) {

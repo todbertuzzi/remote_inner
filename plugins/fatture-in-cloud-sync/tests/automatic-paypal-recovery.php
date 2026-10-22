@@ -136,4 +136,22 @@ $auto = automatic_recovery_fixture();
 $service = new PMPro_FIC_Test_Orders([$plugin,'background_context']);
 error_is($service->reconcile_payment(55,function(){ return false; }), 'forbidden');
 no_recovery_effects('False authorization guard is rejected');
+// Missing/null/wrong-type transaction lists are retryable observations, never payment evidence.
+foreach ([[], ['transactions'=>null], ['transactions'=>'unavailable'], null] as $incomplete) {
+    $auto = automatic_recovery_fixture(); birth55($auto); $valid = $paypal_transactions;
+    $paypal_transactions = $incomplete; run55($auto);
+    check(job55()['state'] === 'waiting' && job55()['attempts'] === 1, 'Incomplete list schedules bounded retry');
+    no_recovery_effects('Incomplete list never updates payment or posts a document');
+    $paypal_transactions = $valid; automatic_document_response(); run55($auto);
+    check(job55()['state'] === 'created' && posts() === 1 && $wpdb->queries === 1, 'Later verified complete response creates exactly one document');
+    run55($auto); check(posts() === 1, 'Repeated worker after eventual success does not duplicate');
+}
+$auto = automatic_recovery_fixture(); birth55($auto); $paypal_transactions = ['transactions'=>null];
+for ($i=0;$i<6;$i++) run55($auto);
+check(job55()['state'] === 'blocked' && job55()['attempts'] === 6, 'Persistent incomplete responses exhaust retry budget');
+no_recovery_effects('Exhausted budget never authorizes an unverified payment');
+$auto = automatic_recovery_fixture(); birth55($auto); $paypal_transactions['transactions'][0]['status'] = 'UNKNOWN'; run55($auto);
+check(job55()['state'] === 'blocked', 'Unknown payment state stays a hard block');
+no_recovery_effects('Unknown state cannot be mistaken for temporary absence');
+
 echo "PASS: {$checks} automatic PayPal recovery checks; PayPal/WordPress simulated, conditional SQL on SQLite, no real payments or documents.\n";

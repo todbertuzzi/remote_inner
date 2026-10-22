@@ -1,7 +1,7 @@
 
 Descrizione piattaforma Wordpress
 
-Integrazione Fatture in Cloud: la versione 0.5.5 del plugin `fatture-in-cloud-sync`
+Integrazione Fatture in Cloud: la versione locale 0.6.1 del plugin `fatture-in-cloud-sync`
 consente il collaudo del collegamento, una simulazione locale e la creazione manuale
 di documenti da ordini PMPro PayPal Sandbox pagati, senza invio allo SDI o email.
 Il checkout dei piani a pagamento raccoglie dati fiscali per privati e aziende /
@@ -20,6 +20,19 @@ Le descrizioni in fattura sono configurabili separatamente per ciascun piano
 PMPro, con lo stesso testo per creazione manuale e automatica.
 L'oggetto nell'elenco FIC usa la descrizione del piano; il riferimento tecnico
 per il recupero degli invii incerti viene conservato nelle note.
+La 0.5.6 aggiunge ritentativi per risposte PayPal incomplete, confronto in sola
+lettura su ordini esistenti, prova cron senza fatture e blocco del recupero FIC
+quando la scansione di 500 documenti non è completa. Installazione e confronto
+PayPal sull’ordine 56 confermati il 21 ottobre; cron-job.org ogni due minuti,
+DISABLE_WP_CRON=true e OVH sospeso confermati dall'utente il 22 ottobre:
+[collaudo fase 1](plugins/fatture-in-cloud-sync/COLLAUDO-0.5.6.md).
+La 0.6.0 aggiunge rinnovi opt-in per singolo abbonamento Sandbox, copie fiscali
+immutabili, verifica remota degli incassi con ID già presente e prenotazioni SQL
+persistenti contro doppie fatture. Installazione 0.6.0 confermata: documenti sugli
+ordini 62 e 67, rinnovi ancora da collaudare. La 0.6.1 locale aggiunge la
+riconciliazione assistita del checkout e del primo incasso su ordini distinti
+(casi 63 e 65), senza spostare ID o cancellare righe PMPro. Non ancora installata:
+[collaudo riconciliazione](plugins/fatture-in-cloud-sync/COLLAUDO-0.6.1.md).
 Installazione e limiti sono descritti nella
 [guida del plugin](plugins/fatture-in-cloud-sync/README.md).
 

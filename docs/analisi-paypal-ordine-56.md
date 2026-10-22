@@ -1,5 +1,82 @@
 # PayPal Sandbox: ordine 56 e documento FIC — 14 ottobre 2026
 
+## Confronto 0.5.6 sul sito — 21 ottobre, esito confermato
+
+L'utente conferma installazione e confronto sull'ordine 56 e ha fornito
+`fic-paypal-api (1).php`. Il file è stato letto esclusivamente come testo:
+25 righe, con protezione PHP alla riga 1, storico 0.5.2 alle righe 2–20
+e cinque nuove registrazioni 0.5.6 alle righe 21–25. Nessuna chiamata remota
+è stata eseguita dall'assistente durante questa analisi.
+
+Orari del 21 ottobre in **Europe/Rome (UTC+2)**:
+
+| Ora | Riga | Esito |
+| --- | --- | --- |
+| 14:23:15 | 21 | Diagnostica 0.5.6 attivata per 60 minuti |
+| 14:23:27.015 | 22 | GET abbonamento: HTTP 200, `ACTIVE`, creazione 14 ottobre 11:21:04 UTC |
+| 14:23:28.007 | 23 | GET transazioni con date `Z`: HTTP 200, elenco di un incasso `COMPLETED` |
+| 14:23:28.896 | 24 | GET transazioni con date `+00:00`: HTTP 200, stesso incasso |
+| 14:23:28.897 | 25 | Riepilogo: ordine 56 `success`, ID pagamento presente, abbonamento `ACTIVE` |
+
+Le due richieste selezionano gli stessi istanti: **14 ottobre 2026,
+10:21:04–12:21:04 UTC**. Entrambe restituiscono l'incasso
+**4VX44692N0631661Y**, **841,80 EUR**, `COMPLETED`, data
+**2026-10-14T11:21:05.000Z**. Le letture durano rispettivamente 992 e 888 ms.
+I riepiloghi selezionati della risposta di trasporto e dopo i filtri coincidono;
+non risultano errori HTTP o di rete in queste tre letture.
+
+È confermata l'esecuzione della diagnostica 0.5.6 sul sito e il suo confronto
+in sola lettura. In questa prova entrambe le forme delle date funzionano:
+non emerge una differenza che spieghi l'anomalia storica. Non si può però
+ricostruire la struttura della risposta del 14 ottobre, né dimostrare un
+ritardo interno PayPal dai risultati ottenuti una settimana dopo.
+
+Il riepilogo attuale certifica la presenza dell'ID locale, non ne riporta il
+valore. Il log PayPal non rilegge il documento FIC 560063390 e non prova una
+nuova creazione, la conservazione di tutte le impostazioni o la regolarità
+del cron. Restano da collaudare i nuovi ritentativi su un'anomalia effettiva,
+il limite della ricerca FIC e lo scheduler indipendente dalle visite.
+Disattivazione della diagnostica non confermata dall'utente; l'attivazione
+registrata scade comunque alle **15:23:15 italiane**, salvo riattivazioni.
+
+## Preparazione del 21 ottobre — fase 1, versione 0.5.6
+
+È stato preparato un confronto amministrativo in sola lettura sull'ordine
+esistente: SELECT dei riferimenti senza `MemberOrder`, GET abbonamento e due
+GET transazioni con la stessa finestra nelle forme `Z` e `+00:00`.
+Al momento della preparazione non era stato eseguito sull'ordine remoto 56;
+il successivo esito è registrato sopra. Il confronto non modifica l'associazione
+al documento 560063390 e non dimostra retroattivamente la causa della risposta
+del 14 ottobre; eventuali differenze fra letture successive richiedono analisi.
+
+La coda ora ritenta entro il budget esistente anche il caso specifico di
+elenco PayPal assente/nullo/non utilizzabile. Prima veniva bloccato subito,
+mentre un elenco vuoto valido era già ritentato. Sono preservati i blocchi
+per dati ambigui e gli esiti FIC incerti. Aggiunti una prova cron innocua e il
+blocco dell'associazione dopo una ricerca FIC incompleta al limite di 500.
+
+L'utente ha confermato il piano OVH **Performance**, PHP 8.3, la presenza di
+`www/wp-cron.php` via FTP e la creazione del cron OVH dopo le istruzioni per
+la frequenza oraria. Il pannello era inizialmente vuoto. L'utente ha poi
+riportato l'esito della prova: scadenza **13:37:37 UTC**, esecuzione
+**13:38:25 UTC** del 21 ottobre, osservata con refresh dopo circa venti minuti.
+L'evento è stato eseguito 48 secondi dopo la scadenza; per attribuirne l'avvio
+a OVH anziché ad altre richieste del sito serve una corrispondenza nei log Cron.
+Il successivo estratto fornito documenta START OVH alle 16:00:09 e END alle
+16:00:10, exitcode 0, ma con **PHP 8.5** anziché PHP 8.3. È provato un avvio
+OVH distinto dalla prova delle 15:38 italiane. Richiesti allineamento della
+versione PHP del task e confronto di una nuova prova con il successivo avvio.
+Le righe HTTP grezze, contenenti cookie, non sono state copiate nel repository.
+L'utente ha poi ripetuto la prova cron: scadenza **14:10:47 UTC**, esecuzione
+**14:22:50 UTC** del 21 ottobre, ritardo **12 minuti e 3 secondi**.
+L'esecuzione è confermata dal messaggio riferito; origine dell'avvio e
+allineamento a PHP 8.3 richiedono ancora il confronto con START/END OVH.
+Installazione e confronto 0.5.6 sono ora confermati come descritto sopra;
+lo scheduler resta da verificare sul sito.
+Procedura e registro: [collaudo fase 1](../plugins/fatture-in-cloud-sync/COLLAUDO-0.5.6.md).
+
+## Evidenze storiche dell'ordine 56
+
 Fonti: registro `fic-paypal-api.php` fornito dall'utente (20 righe, diagnostica
 0.5.2) e screenshot della coda delle 13:25:41. Il registro è stato letto come
 testo, senza eseguire il file PHP. Nessuna chiamata al sito, a PayPal o a FIC.

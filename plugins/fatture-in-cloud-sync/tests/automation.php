@@ -13,8 +13,11 @@ function wp_schedule_single_event($at, $hook, $args = [], $wp_error = false) {
 }
 function wp_cache_delete($key, $group = '') {}
 require_once __DIR__ . '/manual-orders.php';
+if (!defined('PMPRO_FIC_PAYPAL_BOOTSTRAP')) {
+    class PMPro_PayPal_API { public function get_access_token() { return 'fake-sandbox-token'; } }
+}
 
-class AutomationOptionsDatabase {
+class AutomationOptionsDatabase extends AtomicOptionsDatabase {
     public $options = 'wp_options';
     public $before_delete = null;
     public function delete($table, $where, $format) {

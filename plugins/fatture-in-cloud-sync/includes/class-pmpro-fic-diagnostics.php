@@ -1,14 +1,17 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
-/** Osservatore passivo: nessuna modifica a richieste, risposte, ordini o pagamenti. */
+/** Osservatore passivo e prove amministrative esplicite, senza modifiche a ordini o pagamenti. */
 final class PMPro_FIC_Diagnostics {
     const OPTION = 'pmpro_fic_diagnostics';
     const FILE = 'fic-paypal-api.php';
-    const ACTIONS = ['diag_enable', 'diag_disable'];
+    const ACTIONS = ['diag_enable', 'diag_disable', 'diag_compare', 'diag_cron'];
+    const CRON_HOOK = 'pmpro_fic_diagnostic_tick';
+    const CRON_OPTION = 'pmpro_fic_diagnostic_cron';
     const LIMIT = 1048576;
     private $requests = [];
     private $event = [];
+    private $comparing = false;
 
     public function __construct() {
         add_filter('http_request_args', [$this, 'request_args'], PHP_INT_MAX, 2);
@@ -18,6 +21,7 @@ final class PMPro_FIC_Diagnostics {
         add_filter('rest_pre_dispatch', [$this, 'rest_before'], PHP_INT_MAX, 3);
         add_action('pmpro_paypal_webhook_processed', [$this, 'webhook_processed'], PHP_INT_MAX, 3);
         add_filter('rest_post_dispatch', [$this, 'rest_after'], PHP_INT_MAX, 3);
+        add_action(self::CRON_HOOK, [$this, 'cron_tick'], 10, 1);
     }
 
     private function active(): bool {
@@ -63,6 +67,7 @@ final class PMPro_FIC_Diagnostics {
     }
 
     private function context(): string {
+        if ($this->comparing) return 'diagnostic_comparison';
         $activation = $poll = $recovery = $worker = $queue_hook = false;
         foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 45) as $frame) {
             $function = $frame['function'] ?? '';
@@ -246,7 +251,7 @@ final class PMPro_FIC_Diagnostics {
         try {
             if (!flock($stream, LOCK_EX | LOCK_NB)) return false;
             $stat = fstat($stream);
-            $line = wp_json_encode(['time_utc' => gmdate('Y-m-d\TH:i:s\Z'), 'unix_ms' => (int) round(microtime(true) * 1000), 'version' => '0.5.5'] + $entry, JSON_UNESCAPED_SLASHES) . "\n";
+            $line = wp_json_encode(['time_utc' => gmdate('Y-m-d\TH:i:s\Z'), 'unix_ms' => (int) round(microtime(true) * 1000), 'version' => '0.6.1'] + $entry, JSON_UNESCAPED_SLASHES) . "\n";
             if (!$stat || $stat['size'] + strlen($line) + 16 > self::LIMIT) return false;
             fseek($stream, 0, SEEK_END);
             if ($stat['size'] === 0 && fwrite($stream, "<?php exit; ?>\n") === false) return false;
@@ -254,24 +259,94 @@ final class PMPro_FIC_Diagnostics {
         } finally { flock($stream, LOCK_UN); fclose($stream); }
     }
 
-    public function dispatch(string $action) {
+    /** Existing orders, including already invoiced ones. No MemberOrder constructor. */
+    private function compare(array $input) {
+        $id = $input['order_id'] ?? null;
+        if (!is_scalar($id) || !preg_match('/^[1-9][0-9]{0,9}$/D', (string) $id)) return new WP_Error('invalid_order', 'Inserisci l’ID numerico dell’ordine.');
+        if (!class_exists('PMPro_PayPal_API') || !method_exists('PMPro_PayPal_API', 'get_subscription')
+            || !method_exists('PMPro_PayPal_API', 'get_subscription_transactions')) return new WP_Error('gateway_missing', 'API del nuovo gateway PayPal non disponibili.');
+        global $wpdb;
+        $table = $wpdb->pmpro_membership_orders ?? '';
+        if (!is_string($table) || !preg_match('/^[A-Za-z0-9_]+$/D', $table)) return new WP_Error('order_unavailable', 'Tabella ordini non disponibile.');
+        $order = $wpdb->get_row($wpdb->prepare("SELECT id, gateway, gateway_environment, status, subscription_transaction_id, payment_transaction_id FROM {$table} WHERE id = %d LIMIT 1", (int) $id));
+        if (!is_object($order) || (int) $order->id !== (int) $id || $order->gateway !== 'paypal' || $order->gateway_environment !== 'sandbox'
+            || !is_string($order->subscription_transaction_id) || !preg_match('/^I-[A-Z0-9]{5,32}$/D', $order->subscription_transaction_id)) {
+            return new WP_Error('diagnostic_order', 'Serve un ordine del nuovo gateway PayPal Sandbox con ID abbonamento valido.');
+        }
+        $this->comparing = true;
+        try {
+            $api = new PMPro_PayPal_API();
+            $subscription = $api->get_subscription($order->subscription_transaction_id);
+            if (is_wp_error($subscription) || !is_array($subscription) || ($subscription['id'] ?? '') !== $order->subscription_transaction_id
+                || $this->date($subscription['create_time'] ?? '') === '') return new WP_Error('diagnostic_subscription', 'Impossibile verificare l’abbonamento e la sua data di creazione. Nessun ordine modificato.');
+            $created = new DateTimeImmutable($subscription['create_time']);
+            $errors = DateTimeImmutable::getLastErrors();
+            if ($errors && ($errors['warning_count'] || $errors['error_count'])) return new WP_Error('diagnostic_date', 'Data PayPal non valida.');
+            $report = ['order_id' => (int) $id, 'order_status' => in_array($order->status, ['success', 'pending', 'token', 'error', 'cancelled', 'refunded'], true) ? $order->status : 'other',
+                'payment_id_present' => !empty($order->payment_transaction_id), 'subscription_id' => $order->subscription_transaction_id,
+                'subscription_status' => $this->status($subscription['status'] ?? ''), 'readings' => []];
+            // Same instants and window as the gateway, sequential reads. Not a causal experiment.
+            foreach (['Z', '+00:00'] as $suffix) {
+                $start = gmdate('Y-m-d\TH:i:s', $created->getTimestamp() - 3600) . $suffix;
+                $end = gmdate('Y-m-d\TH:i:s', $created->getTimestamp() + 3600) . $suffix;
+                $body = $api->get_subscription_transactions($order->subscription_transaction_id, $start, $end);
+                if (is_wp_error($body)) $summary = ['gateway_error' => true];
+                else {
+                    // Decoded gateway result has no HTTP status. Never invent an HTTP 200.
+                    $summary = $this->response_summary(['body' => wp_json_encode($body)], 'transactions');
+                    unset($summary['http_status']);
+                }
+                $report['readings'][] = ['start_time' => $start, 'end_time' => $end, 'decoded_gateway_response' => $summary];
+            }
+            $this->write(['phase' => 'diagnostic_comparison', 'report' => $report]);
+            return ['message' => 'Letture completate. Nessun ordine o documento modificato. Le due richieste sono successive: eventuali differenze non provano una causa legata al formato delle date.', 'report' => $report];
+        } catch (Throwable $ignored) {
+            return new WP_Error('diagnostic_failed', 'Lettura diagnostica interrotta. Nessuna associazione richiesta; i dettagli grezzi non vengono mostrati.');
+        } finally { $this->comparing = false; }
+    }
+
+    /** A dedicated harmless event proves cron execution without calling the invoice worker. */
+    public function cron_tick($id): void {
+        if (!(defined('DOING_CRON') && DOING_CRON)) return;
+        $probe = get_option(self::CRON_OPTION, []);
+        if (!is_array($probe) || ($probe['id'] ?? '') !== $id || !empty($probe['ran_at'])) return;
+        $probe['ran_at'] = time();
+        update_option(self::CRON_OPTION, $probe, false);
+    }
+
+    private function schedule_probe() {
+        $previous = get_option(self::CRON_OPTION, []);
+        if (is_array($previous) && !empty($previous['id']) && wp_next_scheduled(self::CRON_HOOK, [$previous['id']])) {
+            return ['message' => 'Prova già programmata. Attendi l’esecuzione e ricarica questa sezione.'];
+        }
+        $probe = ['id' => bin2hex(random_bytes(16)), 'scheduled_at' => time(), 'due_at' => time() + 60, 'ran_at' => 0];
+        update_option(self::CRON_OPTION, $probe, false);
+        if (get_option(self::CRON_OPTION) !== $probe) return new WP_Error('diagnostic_storage', 'Impossibile salvare la prova cron.');
+        $scheduled = wp_schedule_single_event($probe['due_at'], self::CRON_HOOK, [$probe['id']], true);
+        if ($scheduled !== true) return new WP_Error('diagnostic_schedule', 'Programmazione cron non riuscita. Nessuna fattura elaborata dalla prova.');
+        return ['message' => 'Prova cron programmata tra un minuto. Chiudi le pagine del sito e verifica dopo almeno due intervalli dello scheduler esterno.'];
+    }
+
+    public function dispatch(string $action, array $input = []) {
         if (!current_user_can('manage_options')) return new WP_Error('forbidden', 'Operazione riservata agli amministratori.');
         check_admin_referer(PMPro_FattureInCloud_Sync::NONCE);
+        if ($action === 'diag_cron') return $this->schedule_probe();
         if ($action === 'diag_disable') {
             update_option(self::OPTION, ['until' => 0], false);
             return ['message' => 'Diagnostica disattivata. Il registro resta disponibile.'];
         }
-        if ($action !== 'diag_enable') return new WP_Error('invalid_action', 'Operazione non disponibile.');
+        if (!in_array($action, ['diag_enable', 'diag_compare'], true)) return new WP_Error('invalid_action', 'Operazione non disponibile.');
         if (get_option('pmpro_gateway', '') !== 'paypal' || get_option('pmpro_gateway_environment', '') !== 'sandbox') {
             return new WP_Error('sandbox_required', 'La diagnostica richiede il nuovo gateway PayPal in modalità Sandbox.');
         }
+        if ($action === 'diag_compare') return $this->compare($input);
         if ($this->path() === '') return new WP_Error('log_unavailable', 'La cartella riservata dei log PMPro non è disponibile.');
         update_option(self::OPTION, ['until' => time() + 3600], false);
         if (!$this->write(['phase' => 'diagnostics_enabled', 'duration_minutes' => 60])) {
             update_option(self::OPTION, ['until' => 0], false);
             return new WP_Error('log_unwritable', 'Registro non scrivibile, occupato o pieno (limite 1 MB). Diagnostica non attivata.');
         }
-        return ['message' => 'Diagnostica attiva per 60 minuti. Esegui ora un nuovo acquisto PayPal Sandbox.'];
+        return ['message' => 'Diagnostica attiva per 60 minuti. Puoi confrontare le letture di un ordine esistente senza nuovi acquisti.'];
     }
 
     public function render($result, string $action): void {
@@ -279,6 +354,7 @@ final class PMPro_FIC_Diagnostics {
         echo '<hr><section id="fic-diagnostics"><h2 tabindex="-1">5. Diagnostica PayPal Sandbox</h2>';
         echo '<p>Registra gli esiti delle API e dei webhook per capire perché un ordine completato può non avere l’ID dell’incasso. Non cambia il checkout o i pagamenti. Non registra token, credenziali o dati anagrafici.</p>';
         if ($diag_action && $result !== null) echo '<div class="notice ' . (is_wp_error($result) ? 'notice-error' : 'notice-success') . ' inline"><p>' . esc_html(is_wp_error($result) ? $result->get_error_message() : $result['message']) . '</p></div>';
+        if ($action === 'diag_compare' && is_array($result) && isset($result['report'])) echo '<pre style="white-space:pre-wrap">' . esc_html(wp_json_encode($result['report'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) . '</pre>';
         $config = get_option(self::OPTION, []);
         echo '<p><strong>Stato:</strong> ' . ($this->active() ? 'attiva, ancora ' . (int) ceil(((int) $config['until'] - time()) / 60) . ' minuti.' : 'disattivata.') . '</p>';
         foreach (['diag_enable' => 'Attiva diagnostica per 60 minuti', 'diag_disable' => 'Disattiva diagnostica'] as $name => $label) {
@@ -288,6 +364,20 @@ final class PMPro_FIC_Diagnostics {
             submit_button($label, 'secondary');
             echo '</form>';
         }
+        foreach (['diag_compare' => 'Confronta letture PayPal (sola lettura)', 'diag_cron' => 'Programma prova cron senza fatture'] as $name => $label) {
+            echo '<form method="post" action="' . esc_url(admin_url('options-general.php?page=' . PMPro_FattureInCloud_Sync::PAGE) . '#fic-diagnostics') . '">';
+            wp_nonce_field(PMPro_FattureInCloud_Sync::NONCE);
+            echo '<input type="hidden" name="fic_action" value="' . esc_attr($name) . '">';
+            if ($name === 'diag_compare') echo '<label>ID ordine PMPro <input type="number" name="order_id" min="1" required></label>';
+            submit_button($label, 'secondary'); echo '</form>';
+        }
+        $probe = get_option(self::CRON_OPTION, []);
+        if (is_array($probe) && !empty($probe['due_at'])) {
+            echo '<p>Prova cron: scadenza UTC ' . esc_html(gmdate('Y-m-d H:i:s', $probe['due_at'])) . '. ';
+            echo !empty($probe['ran_at']) ? 'Eseguita UTC ' . esc_html(gmdate('Y-m-d H:i:s', $probe['ran_at'])) . '.' : 'Esecuzione non ancora registrata.';
+            echo '</p>';
+        }
+        echo '<p>Cron da visite: ' . ((defined('DISABLE_WP_CRON') && DISABLE_WP_CRON) ? 'disabilitato' : 'abilitato') . '. La prova non certifica da sola uno scheduler esterno: confronta l’orario con i log del servizio e con la prima visita successiva.</p>';
         // Do not create directories while rendering a disabled panel.
         if (function_exists('pmpro_get_restricted_file_path') && get_option(self::OPTION, null) !== null) {
             echo '<p><a href="' . esc_url(admin_url('?pmpro_restricted_file_dir=logs&pmpro_restricted_file=' . self::FILE)) . '">Scarica registro diagnostico PayPal</a></p>';
