@@ -2,7 +2,7 @@
 /** Run: php plugins/fatture-in-cloud-sync/tests/paypal-recovery.php */
 if (!defined('PMPRO_FIC_ORDERS_BOOTSTRAP')) define('PMPRO_FIC_ORDERS_BOOTSTRAP', true);
 require_once __DIR__ . '/manual-orders.php';
-function wp_timezone() { return new DateTimeZone('Europe/Rome'); }
+function wp_timezone() { return new DateTimeZone($GLOBALS['tz'] ?? 'Europe/Rome'); }
 
 class PMPro_PayPal_API {
     public function get_access_token() { return 'fake-sandbox-token'; }

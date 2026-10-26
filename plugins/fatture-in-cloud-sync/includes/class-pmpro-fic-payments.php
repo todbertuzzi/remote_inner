@@ -69,12 +69,17 @@ final class PMPro_FIC_Payments {
             return new WP_Error('payment_state', 'Incasso PayPal non completato, rimborsato o soggetto a verifica.');
         }
         $amount = $sale['amount']['total'] ?? null;
-        if (!is_string($amount) || !preg_match('/^(0|[1-9][0-9]{0,6})(?:\.([0-9]{1,2}))?$/D', $amount, $parts)
-            || ($sale['amount']['currency'] ?? '') !== 'EUR') return new WP_Error('payment_amount', 'Importo o valuta PayPal non validi per questo collaudo.');
+        $currency = $sale['amount']['currency'] ?? null;
+        // Struttura mancante o illeggibile = risposta incompleta (da ripetere); solo valori ben formati ma diversi sono un mismatch.
+        if (!is_string($amount) || !preg_match('/^(0|[1-9][0-9]{0,6})(?:\.([0-9]{1,2}))?$/D', $amount, $parts) || !is_string($currency) || $currency === '') {
+            return new WP_Error('payment_incomplete', 'Importo o valuta PayPal mancanti o illeggibili. Nessun documento inviato.');
+        }
+        if ($currency !== 'EUR') return new WP_Error('payment_amount', 'Importo o valuta PayPal non validi per questo collaudo.');
         $cents = (int) $parts[1] * 100 + (int) str_pad($parts[2] ?? '', 2, '0');
         if ($cents <= 0 || $cents !== (int) round((float) $order->total * 100)) return new WP_Error('payment_amount', 'Importo PayPal diverso dal totale dell’ordine.');
         $at = self::timestamp($sale['create_time']);
-        if ($at === false || $at > time() + 300) return new WP_Error('payment_time', 'Data dell’incasso PayPal non valida.');
+        if ($at === false) return new WP_Error('payment_incomplete', 'Data dell’incasso PayPal mancante o illeggibile. Nessun documento inviato.');
+        if ($at > time() + 300) return new WP_Error('payment_time', 'Data dell’incasso PayPal non valida.');
         return ['payment_id' => $id, 'subscription_id' => $sale['billing_agreement_id'], 'currency' => 'EUR',
             'cents' => $cents, 'status' => 'COMPLETED', 'paid_at' => gmdate('Y-m-d\TH:i:s\Z', $at)];
     }

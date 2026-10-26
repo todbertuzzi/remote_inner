@@ -251,7 +251,7 @@ final class PMPro_FIC_Diagnostics {
         try {
             if (!flock($stream, LOCK_EX | LOCK_NB)) return false;
             $stat = fstat($stream);
-            $line = wp_json_encode(['time_utc' => gmdate('Y-m-d\TH:i:s\Z'), 'unix_ms' => (int) round(microtime(true) * 1000), 'version' => '0.6.1'] + $entry, JSON_UNESCAPED_SLASHES) . "\n";
+            $line = wp_json_encode(['time_utc' => gmdate('Y-m-d\TH:i:s\Z'), 'unix_ms' => (int) round(microtime(true) * 1000), 'version' => '0.7.3'] + $entry, JSON_UNESCAPED_SLASHES) . "\n";
             if (!$stat || $stat['size'] + strlen($line) + 16 > self::LIMIT) return false;
             fseek($stream, 0, SEEK_END);
             if ($stat['size'] === 0 && fwrite($stream, "<?php exit; ?>\n") === false) return false;

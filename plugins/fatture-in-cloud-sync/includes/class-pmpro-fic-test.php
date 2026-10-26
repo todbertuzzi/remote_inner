@@ -350,6 +350,7 @@ final class PMPro_FattureInCloud_Sync {
         $orders->render($result, $action);
         $this->automation->render($result, $action);
         $this->diagnostics->render($result, $action);
+        PMPro_FIC_Webhook_Guard::render_status();
         echo '</div>';
     }
 }

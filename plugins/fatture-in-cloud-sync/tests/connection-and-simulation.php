@@ -10,6 +10,7 @@ class WP_Error {
 class InvalidNonce extends RuntimeException {}
 function add_action($hook, $callback, ...$args) { $GLOBALS['hooks'][$hook][] = $callback; }
 function add_filter($hook, $callback, ...$args) { $GLOBALS['filters'][$hook][] = $callback; }
+function apply_filters($hook, $value, ...$args) { return array_key_exists($hook, $GLOBALS['filter_values'] ?? []) ? $GLOBALS['filter_values'][$hook] : $value; }
 function current_user_can($cap) { return $cap === 'manage_options' && $GLOBALS['admin']; }
 function get_option($name, $default = []) { return $name === 'pmpro_fic_sync_options' ? $GLOBALS['options'] : ($GLOBALS['settings_store'][$name] ?? $default); }
 function get_transient($key) {

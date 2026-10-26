@@ -233,31 +233,8 @@ final class PMPro_FIC_PayPal_Recovery {
             if (get_option($journal_key, []) !== $audit) return new WP_Error('paypal_recovery_storage', 'Impossibile registrare la verifica. Nessun ID aggiornato.');
             $allowed = $this->authorized($guard);
             if (is_wp_error($allowed)) return $allowed;
-            // Aggiorna solo il riferimento vuoto, con confronto atomico dell'identità ordine.
-            // La self join blocca un ID che nel frattempo sia stato salvato su un altro ordine.
-            // PMPro total è varchar(16): confrontare il valore letto, senza riformattarlo.
-            $changed = $wpdb->query($wpdb->prepare(
-                "UPDATE {$table} AS target LEFT JOIN {$table} AS taken
-                 ON taken.payment_transaction_id = %s AND taken.gateway_environment = 'sandbox' AND taken.id <> target.id
-                 SET target.payment_transaction_id = %s
-                 WHERE target.id = %d AND target.code = %s AND target.user_id = %d AND target.membership_id = %d
-                 AND target.gateway = 'paypal' AND target.gateway_environment = 'sandbox' AND target.status = 'success'
-                 AND target.subscription_transaction_id = %s AND target.total = %s
-                 AND (target.payment_transaction_id = '' OR target.payment_transaction_id IS NULL) AND taken.id IS NULL",
-                $payment['payment_id'], $payment['payment_id'], (int) $order->id, (string) $order->code,
-                (int) $order->user_id, (int) $order->membership_id, (string) $order->subscription_transaction_id,
-                (string) $fresh->total
-            ));
-            if ($changed === false) {
-                return new WP_Error('paypal_recovery_query', 'Il database non ha eseguito l’associazione dell’ID pagamento (PAYPAL-DB-QUERY). Ricarica l’ordine e verifica la configurazione del database.');
-            }
-            if ($changed !== 1) {
-                return new WP_Error('paypal_recovery_storage', 'ID non aggiornato: nessuna riga corrisponde alle condizioni verificate. L’ordine potrebbe essere cambiato o il pagamento già associato. Ricaricalo e verifica gli ordini.');
-            }
-            $saved = new MemberOrder((int) $order->id);
-            if ((int) $saved->id !== (int) $order->id || (string) $saved->payment_transaction_id !== $payment['payment_id']) {
-                return new WP_Error('paypal_recovery_readback', 'Il database segnala un aggiornamento, ma la rilettura non conferma l’ID pagamento (PAYPAL-DB-READBACK). Verifica l’ordine in PMPro prima di proseguire.');
-            }
+            $written = self::write_payment($fresh, $payment);
+            if (is_wp_error($written)) return $written;
             $audit['status'] = 'updated';
             update_option($journal_key, $audit, false);
             update_pmpro_membership_order_meta((int) $order->id, self::META, $audit);
@@ -266,5 +243,88 @@ final class PMPro_FIC_PayPal_Recovery {
         } finally {
             delete_option($lock);
         }
+    }
+
+    /** Unico punto che scrive l'ID incasso: aggiornamento atomico del solo riferimento vuoto, con rilettura. */
+    private static function write_payment($fresh, array $payment) {
+        $order = $fresh;
+        global $wpdb;
+        $table = $wpdb->pmpro_membership_orders ?? '';
+        if (!is_string($table) || !preg_match('/^[A-Za-z0-9_]+$/D', $table)) return new WP_Error('paypal_recovery_storage', 'Tabella ordini PMPro non disponibile.');
+        // Aggiorna solo il riferimento vuoto, con confronto atomico dell'identità ordine.
+        // La self join blocca un ID che nel frattempo sia stato salvato su un altro ordine.
+        // PMPro total è varchar(16): confrontare il valore letto, senza riformattarlo.
+        $changed = $wpdb->query($wpdb->prepare(
+            "UPDATE {$table} AS target LEFT JOIN {$table} AS taken
+             ON taken.payment_transaction_id = %s AND taken.gateway_environment = 'sandbox' AND taken.id <> target.id
+             SET target.payment_transaction_id = %s
+             WHERE target.id = %d AND target.code = %s AND target.user_id = %d AND target.membership_id = %d
+             AND target.gateway = 'paypal' AND target.gateway_environment = 'sandbox' AND target.status = 'success'
+             AND target.subscription_transaction_id = %s AND target.total = %s
+             AND (target.payment_transaction_id = '' OR target.payment_transaction_id IS NULL) AND taken.id IS NULL",
+            $payment['payment_id'], $payment['payment_id'], (int) $order->id, (string) $order->code,
+            (int) $order->user_id, (int) $order->membership_id, (string) $order->subscription_transaction_id,
+            (string) $fresh->total
+        ));
+        if ($changed === false) {
+            return new WP_Error('paypal_recovery_query', 'Il database non ha eseguito l’associazione dell’ID pagamento (PAYPAL-DB-QUERY). Ricarica l’ordine e verifica la configurazione del database.');
+        }
+        if ($changed !== 1) {
+            return new WP_Error('paypal_recovery_storage', 'ID non aggiornato: nessuna riga corrisponde alle condizioni verificate. L’ordine potrebbe essere cambiato o il pagamento già associato. Ricaricalo e verifica gli ordini.');
+        }
+        $saved = new MemberOrder((int) $order->id);
+        if ((int) $saved->id !== (int) $order->id || (string) $saved->payment_transaction_id !== $payment['payment_id']) {
+            return new WP_Error('paypal_recovery_readback', 'Il database segnala un aggiornamento, ma la rilettura non conferma l’ID pagamento (PAYPAL-DB-READBACK). Verifica l’ordine in PMPro prima di proseguire.');
+        }
+        return true;
+    }
+
+    /**
+     * Webhook PAYMENT.SALE.COMPLETED del primo incasso: associa l'ID verificato al checkout già pagato,
+     * così che il gestore PMPro lo riconosca ed eviti di creare un secondo ordine.
+     * Coordinamento: l'UPDATE condizionale è l'unica serializzazione. Chi perde la corsa rilegge l'ordine:
+     * se porta già lo stesso ID (altro webhook, coda o recupero manuale) l'associazione è comunque riuscita.
+     */
+    public static function bind_from_webhook($order, array $payment) {
+        if (!is_object($order) || ($order->status ?? '') !== 'success' || trim((string) $order->payment_transaction_id) !== ''
+            || ($order->gateway ?? '') !== 'paypal' || ($order->gateway_environment ?? '') !== 'sandbox'
+            || ($payment['subscription_id'] ?? '') !== (string) $order->subscription_transaction_id
+            || ($payment['status'] ?? '') !== 'COMPLETED' || !preg_match('/^[A-Z0-9-]{5,64}$/D', (string) ($payment['payment_id'] ?? ''))) {
+            return new WP_Error('paypal_recovery_webhook', 'Ordine o incasso non idonei all’associazione da webhook.');
+        }
+        $audit = ['status' => 'verified', 'order_id' => (int) $order->id, 'admin_id' => 0, 'owner' => wp_generate_uuid4(),
+            'verified_at' => current_time('mysql'), 'origin' => 'webhook', 'payment' => $payment];
+        $journal_key = 'pmpro_fic_paypal_recovery_' . $order->id;
+        // Un registro già presente (altro processo, interruzione) non blocca: la scrittura dell'ID resta condizionale.
+        update_option($journal_key, $audit, false);
+        if (get_option($journal_key, []) !== $audit) return new WP_Error('paypal_recovery_storage', 'Impossibile registrare la verifica. Nessun ID aggiornato.');
+        $written = self::write_payment($order, $payment);
+        if (is_wp_error($written)) {
+            $current = new MemberOrder((int) $order->id);
+            if ((int) $current->id === (int) $order->id && (string) $current->payment_transaction_id === $payment['payment_id']) {
+                $written = true; // Associazione già eseguita da un'altra richiesta con lo stesso incasso.
+            } else {
+                // Rimuove solo il proprio registro; quello di un processo concorrente non viene toccato.
+                if ($written->get_error_code() !== 'paypal_recovery_readback' && get_option($journal_key, []) === $audit) delete_option($journal_key);
+                return $written;
+            }
+        }
+        return self::complete_audit($order, $payment, 'webhook');
+    }
+
+    /** Scrive e rilegge journal e metadati dell'ordine; idempotente, non tocca ID pagamento né ordini. */
+    public static function complete_audit($order, array $payment, string $origin) {
+        $key = 'pmpro_fic_paypal_recovery_' . $order->id;
+        $previous = get_option($key, []);
+        $audit = ['status' => 'updated', 'order_id' => (int) $order->id, 'admin_id' => 0,
+            'verified_at' => is_array($previous) && isset($previous['verified_at']) ? $previous['verified_at'] : current_time('mysql'),
+            'origin' => $origin, 'payment' => $payment];
+        if (is_array($previous) && isset($previous['owner'])) $audit['owner'] = $previous['owner'];
+        update_option($key, $audit, false);
+        update_pmpro_membership_order_meta((int) $order->id, self::META, $audit);
+        if (get_option($key, []) !== $audit || get_pmpro_membership_order_meta((int) $order->id, self::META, true) !== $audit) {
+            return new WP_Error('paypal_recovery_audit', 'ID pagamento associato, ma il registro della verifica non è stato confermato. Verrà ripreso alla prossima notifica.');
+        }
+        return true;
     }
 }

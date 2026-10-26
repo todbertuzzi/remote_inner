@@ -16,10 +16,19 @@ class MemberOrder {
     public $total = '122.00';
     public $timestamp = 1791849600;
     public $billing;
-    public function __construct($id) {
+    public function __construct($id = 0) {
         if (isset($GLOBALS['orders'][$id])) {
             foreach ($GLOBALS['orders'][$id] as $key => $value) $this->$key = $value;
         }
+    }
+    /** Minimal persistence for tests that run PMPro's own handlers: inserts or updates the global order table. */
+    public function saveOrder() {
+        if (empty($this->id)) {
+            $this->id = max(array_merge([0], array_keys($GLOBALS['orders']))) + 1;
+            if (empty($this->code) || $this->code === 'SANDBOX01') $this->code = 'NEWORDER' . $this->id;
+        }
+        $GLOBALS['orders'][$this->id] = get_object_vars($this);
+        return $this;
     }
     public static function get_orders(array $args = []) {
         $found = [];
@@ -47,7 +56,7 @@ function update_option($key, $value, $autoload = false) {
 function delete_option($key) { unset($GLOBALS['settings_store'][$key]); }
 function get_pmpro_membership_order_meta($id, $key, $single = false) { return $GLOBALS['order_meta'][$id][$key] ?? ''; }
 function get_current_user_id() { return $GLOBALS['admin_id']; }
-function get_userdata($id) { return (object) ['user_email' => 'buyer@example.test']; }
+function get_userdata($id) { return (object) ['ID' => $id, 'user_email' => 'buyer@example.test']; }
 function wp_generate_uuid4() { return sprintf('12345678-1234-4234-8234-%012d', ++$GLOBALS['uuid_count']); }
 function wp_date($format, $timestamp) { return gmdate($format, $timestamp); }
 function sanitize_email($email) { return filter_var($email, FILTER_SANITIZE_EMAIL); }

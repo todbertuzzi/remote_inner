@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PMPro → Fatture in Cloud Sync
  * Description: Documenti /TEST e coda per acquisti e rinnovi autorizzati PMPro PayPal Sandbox, senza invio allo SDI.
- * Version: 0.6.1
+ * Version: 0.7.3
  * Requires PHP: 7.4
  */
 if (!defined('ABSPATH')) exit;
@@ -14,6 +14,8 @@ require_once __DIR__ . '/includes/class-pmpro-fic-payments.php';
 require_once __DIR__ . '/includes/class-pmpro-fic-renewals.php';
 require_once __DIR__ . '/includes/class-pmpro-fic-initial-pair.php';
 require_once __DIR__ . '/includes/class-pmpro-fic-automation.php';
+require_once __DIR__ . '/includes/class-pmpro-fic-webhook-guard.php';
 require_once __DIR__ . '/includes/class-pmpro-fic-diagnostics.php';
 new PMPro_FIC_Billing();
+new PMPro_FIC_Webhook_Guard();
 new PMPro_FattureInCloud_Sync();

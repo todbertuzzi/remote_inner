@@ -1,6 +1,6 @@
 # PMPro → Fatture in Cloud: collaudo con ordini PayPal Sandbox
 
-La versione 0.6.1 comprende la verifica del collegamento, la simulazione locale
+La versione 0.7.3 aggiunge una guardia sul webhook PayPal che evita il secondo ordine per il primo incasso, dopo tre revisioni indipendenti ([COLLAUDO-0.7.3.md](COLLAUDO-0.7.3.md); le 0.7.0, 0.7.1 e 0.7.2 non vanno installate). La versione 0.6.1 comprende la verifica del collegamento, la simulazione locale
 e la creazione **manuale** di un documento da un ordine PayPal Sandbox pagato.
 Raccoglie inoltre i dati fiscali nei checkout a pagamento e ne conserva una
 copia per ordine, con separazione tra privati e aziende/professionisti.
