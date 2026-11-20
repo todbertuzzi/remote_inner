@@ -87,6 +87,27 @@ function gim_get_invite_registration_context($kind, $token) {
     return array('kind' => $kind, 'token' => $token, 'email' => $email, 'bound_user_id' => $bound_user_id, 'invite' => $invite, 'url' => $url);
 }
 
+/** Chiamata solo dopo la creazione riuscita di un account tramite invito. */
+function gim_send_invited_welcome_email($user_id, $context) {
+    $user = get_userdata($user_id);
+    if (!$user) return false;
+
+    $invitation_label = $context['kind'] === 'game' ? 'Vai alla partita' : 'Vai alla sessione Scrivania';
+    $body = '<h1>Benvenuto su Inplayce Tools!</h1>' .
+        '<p>Il tuo account è stato creato correttamente. Puoi utilizzarlo per partecipare ai giochi e alle sessioni Scrivania a cui vieni invitato.</p>' .
+        '<p><strong>Nome utente:</strong> ' . esc_html($user->user_login) . '</p>' .
+        '<p>Per accedere, usa il tuo nome utente o la tua email e la password che hai scelto durante la registrazione.</p>' .
+        '<p><a href="' . esc_url($context['url']) . '">' . esc_html($invitation_label) . '</a></p>' .
+        '<p>Puoi ritrovare gli inviti ricevuti nella pagina <a href="' . esc_url(home_url('/dashboard-invitato/')) . '">I miei inviti</a>, dopo aver effettuato l’accesso.</p>' .
+        '<p>L’accesso a ciascuna sessione dipende dalla validità dell’invito e dall’eventuale orario previsto.</p>' .
+        '<p>A presto,<br>Il team Inplayce Tools</p>';
+
+    $sent = wp_mail($user->user_email, 'Benvenuto su Inplayce Tools', $body, array('Content-Type: text/html; charset=UTF-8'));
+    // Registra l'esito del trasporto, non la consegna effettiva al destinatario.
+    update_user_meta($user_id, '_gim_welcome_email_status', $sent ? 'sent' : 'failed');
+    return $sent;
+}
+
 /** Crea esclusivamente un nuovo account invitato. Non modifica account esistenti. */
 function gim_register_invited_user($kind, $token, $input) {
     if (is_user_logged_in()) return new WP_Error('already_logged_in', 'Hai già effettuato l’accesso.', array('status' => 403));
@@ -113,13 +134,18 @@ function gim_register_invited_user($kind, $token, $input) {
         return new WP_Error('invalid_password', 'Scegli una password di almeno 8 caratteri.', array('status' => 400));
     }
     gim_register_invited_role();
-    return wp_insert_user(array(
+    $user_id = wp_insert_user(array(
         'user_login' => $username,
         'user_email' => $context['email'],
         'user_pass' => $password,
         'role' => 'invitato',
         'meta_input' => array('_gim_registered_via_invite' => 1),
     ));
+    if (is_wp_error($user_id)) return $user_id;
+
+    // L'esito dell'email non deve impedire login e accesso all'invito.
+    gim_send_invited_welcome_email($user_id, $context);
+    return $user_id;
 }
 
 function gim_invite_nocache() {

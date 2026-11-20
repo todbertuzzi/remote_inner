@@ -251,7 +251,7 @@ final class PMPro_FIC_Diagnostics {
         try {
             if (!flock($stream, LOCK_EX | LOCK_NB)) return false;
             $stat = fstat($stream);
-            $line = wp_json_encode(['time_utc' => gmdate('Y-m-d\TH:i:s\Z'), 'unix_ms' => (int) round(microtime(true) * 1000), 'version' => '0.7.3'] + $entry, JSON_UNESCAPED_SLASHES) . "\n";
+            $line = wp_json_encode(['time_utc' => gmdate('Y-m-d\TH:i:s\Z'), 'unix_ms' => (int) round(microtime(true) * 1000), 'version' => '0.8.0'] + $entry, JSON_UNESCAPED_SLASHES) . "\n";
             if (!$stat || $stat['size'] + strlen($line) + 16 > self::LIMIT) return false;
             fseek($stream, 0, SEEK_END);
             if ($stat['size'] === 0 && fwrite($stream, "<?php exit; ?>\n") === false) return false;
@@ -351,21 +351,21 @@ final class PMPro_FIC_Diagnostics {
 
     public function render($result, string $action): void {
         $diag_action = in_array($action, self::ACTIONS, true);
-        echo '<hr><section id="fic-diagnostics"><h2 tabindex="-1">5. Diagnostica PayPal Sandbox</h2>';
+        echo '<hr><section id="fic-diagnostics"><h2 tabindex="-1">Diagnostica PayPal Sandbox</h2>';
         echo '<p>Registra gli esiti delle API e dei webhook per capire perché un ordine completato può non avere l’ID dell’incasso. Non cambia il checkout o i pagamenti. Non registra token, credenziali o dati anagrafici.</p>';
         if ($diag_action && $result !== null) echo '<div class="notice ' . (is_wp_error($result) ? 'notice-error' : 'notice-success') . ' inline"><p>' . esc_html(is_wp_error($result) ? $result->get_error_message() : $result['message']) . '</p></div>';
         if ($action === 'diag_compare' && is_array($result) && isset($result['report'])) echo '<pre style="white-space:pre-wrap">' . esc_html(wp_json_encode($result['report'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) . '</pre>';
         $config = get_option(self::OPTION, []);
         echo '<p><strong>Stato:</strong> ' . ($this->active() ? 'attiva, ancora ' . (int) ceil(((int) $config['until'] - time()) / 60) . ' minuti.' : 'disattivata.') . '</p>';
         foreach (['diag_enable' => 'Attiva diagnostica per 60 minuti', 'diag_disable' => 'Disattiva diagnostica'] as $name => $label) {
-            echo '<form method="post" action="' . esc_url(admin_url('options-general.php?page=' . PMPro_FattureInCloud_Sync::PAGE) . '#fic-diagnostics') . '">';
+            echo '<form method="post" action="' . esc_url(admin_url('options-general.php?page=' . PMPro_FattureInCloud_Sync::PAGE . '&fic_section=assistenza') . '#fic-diagnostics') . '">';
             wp_nonce_field(PMPro_FattureInCloud_Sync::NONCE);
             echo '<input type="hidden" name="fic_action" value="' . esc_attr($name) . '">';
             submit_button($label, 'secondary');
             echo '</form>';
         }
         foreach (['diag_compare' => 'Confronta letture PayPal (sola lettura)', 'diag_cron' => 'Programma prova cron senza fatture'] as $name => $label) {
-            echo '<form method="post" action="' . esc_url(admin_url('options-general.php?page=' . PMPro_FattureInCloud_Sync::PAGE) . '#fic-diagnostics') . '">';
+            echo '<form method="post" action="' . esc_url(admin_url('options-general.php?page=' . PMPro_FattureInCloud_Sync::PAGE . '&fic_section=assistenza') . '#fic-diagnostics') . '">';
             wp_nonce_field(PMPro_FattureInCloud_Sync::NONCE);
             echo '<input type="hidden" name="fic_action" value="' . esc_attr($name) . '">';
             if ($name === 'diag_compare') echo '<label>ID ordine PMPro <input type="number" name="order_id" min="1" required></label>';

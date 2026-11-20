@@ -1,5 +1,77 @@
 # PMPro → Fatture in Cloud: collaudo con ordini PayPal Sandbox
 
+## 0.8.0 — regole per piano e abilitazione automatica dei rinnovi
+
+In **Impostazioni → Automazione dei documenti → Fatturazione automatica per piano**
+si scelgono separatamente primo acquisto e rinnovi. L’abilitazione dei rinnovi
+richiede quella del primo acquisto e una conferma esplicita sui dati fiscali.
+La modalità resta PayPal **Sandbox**, EUR, documenti **/TEST**, senza SDI o email.
+
+Finché non si salvano le nuove regole, l’aggiornamento conserva il comportamento
+precedente: primi acquisti in coda e rinnovi autorizzati manualmente. Il salvataggio
+non riattiva né riconfigura l’automazione generale, non sovrascrive le copie fiscali
+e non importa gli ordini esistenti. I piani non selezionati o aggiunti successivamente
+sono esclusi dai nuovi acquisti automatici. I lavori già acquisiti conservano la
+regola registrata al checkout; le autorizzazioni esistenti continuano a valere.
+
+Per un nuovo checkout di un piano abilitato, la coda associa il documento iniziale,
+verifica l’incasso PayPal e autorizza i rinnovi con la copia fiscale del checkout.
+L’autorizzazione registra il piano, la revisione della regola e l’amministratore
+che l’ha salvata; il worker anonimo non diventa l’autore dell’autorizzazione.
+
+Se la verifica dell’abilitazione fallisce, il documento associato viene conservato.
+I ritentativi di questa fase non richiamano FIC e non ricreano fatture. Dopo cinque
+verifiche temporaneamente fallite, o un errore definitivo, compare una richiesta
+di correzione e il comando **Riprova solo abilitazione rinnovi**. Le segnalazioni
+sono in Documenti, Panoramica e Rinnovi, con il perimetro esplicito degli ultimi
+20 lavori; un ordine precedente resta consultabile tramite il suo ID.
+
+La sospensione manuale per abbonamento resta valida e non viene mai cancellata
+dall’automatismo. È possibile sospendere anche un’abilitazione ancora in attesa,
+quando l’ordine iniziale ha già un ID abbonamento. Gli addebiti PayPal sono separati.
+
+Guida al collaudo: [COLLAUDO-0.8.0.md](COLLAUDO-0.8.0.md).
+
+## 0.7.4 — interfaccia integrata, 26 ottobre 2026
+
+La pagina del plugin ora contiene una sidebar interna con **Panoramica,
+Documenti, Rinnovi, Impostazioni e Assistenza**, dentro il contenuto del backend.
+La barra di WordPress e il suo menu laterale restano quelli del sito. Stili e
+script vengono caricati solo nella pagina del plugin; su schermi piccoli la
+navigazione interna diventa compatta.
+
+- Panoramica: stato effettivo dell’automazione, contatori degli ultimi 20 lavori
+  e ultima prova cron. Nessun totale inventato sullo storico completo.
+- Documenti: coda, ricerca locale e filtri, riferimenti tecnici espandibili,
+  strumenti manuali e recuperi. Le conferme esistenti restano necessarie.
+- Rinnovi: autorizzazioni realmente salvate, paginate, stato della fatturazione
+  e comandi esistenti. La prossima data di addebito non viene dedotta.
+- Impostazioni: collegamento, aliquota, descrizioni e conto d’incasso.
+- Assistenza: diagnostica, cron, eventi webhook leggibili e simulazione locale.
+
+L’apertura delle schermate non contatta i gateway, non costruisce oggetti ordine
+PMPro e non riscrive impostazioni, copie fiscali o autorizzazioni. I moduli usano
+le azioni e i nonce esistenti e richiedono `manage_options`. Ricerca e filtri sono
+miglioramenti JavaScript: navigazione e operazioni funzionano anche senza script.
+I risultati POST tornano nella sezione competente, anche da vecchi URL senza
+parametro di navigazione.
+
+**Il pulsante “Autorizza la fatturazione dei rinnovi” controlla i documenti /TEST,
+non gli addebiti PayPal.** L’aggiornamento non richiede di autorizzare nuovamente
+gli abbonamenti o di salvare nuovamente la configurazione.
+
+Il collaudo dei rinnovi della 0.7.3 è stato confermato dall’utente il 26 ottobre:
+documenti per i due abbonamenti autorizzati, con ordine di rinnovo e incasso
+corretti. Questa release conserva i processi di pagamento, fatturazione,
+recupero e rinnovo; modifica la presentazione. Il limite preesistente degli
+ultimi 100 registri nel recupero audit è ora dichiarato nella UI, non risolto.
+
+Per installazione e verifica: [COLLAUDO-0.7.4.md](COLLAUDO-0.7.4.md).
+Le note successive descrivono le versioni precedenti; i riferimenti numerici alle
+vecchie sezioni vanno letti secondo la mappa nella nuova guida.
+
+## Note delle versioni precedenti
+
 La versione 0.7.3 aggiunge una guardia sul webhook PayPal che evita il secondo ordine per il primo incasso, dopo tre revisioni indipendenti ([COLLAUDO-0.7.3.md](COLLAUDO-0.7.3.md); le 0.7.0, 0.7.1 e 0.7.2 non vanno installate). La versione 0.6.1 comprende la verifica del collegamento, la simulazione locale
 e la creazione **manuale** di un documento da un ordine PayPal Sandbox pagato.
 Raccoglie inoltre i dati fiscali nei checkout a pagamento e ne conserva una

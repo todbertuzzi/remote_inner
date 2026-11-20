@@ -260,6 +260,7 @@ check($invalid['plan_descriptions'] === $options['plan_descriptions'] && in_arra
 $invalid = $plugin->sanitize_options(['company_id'=>'123', 'vat_id'=>'0', 'plan_descriptions'=>['bad'=>['bad']]]);
 check($invalid['plan_descriptions'] === $options['plan_descriptions'], 'Malformed mapping cannot overwrite saved text');
 $options['plan_descriptions'][9] = 'Servizio piano storico';
+$_GET['fic_section'] = 'impostazioni';
 $html = render_page();
 check(str_contains($html, 'Professional') && str_contains($html, 'Gold') && str_contains($html, 'plan_descriptions][4]'), 'Admin fields follow real PMPro levels and IDs');
 check(str_contains($html, 'Servizio piano storico') && str_contains($html, 'plan_descriptions][9]'), 'Descriptions for retired plans remain editable');

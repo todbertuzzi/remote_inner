@@ -1,14 +1,14 @@
 # Analisi delle email transazionali della piattaforma
 
-Data: **13 ottobre 2026**. Analisi del codice disponibile nel workspace, senza
+Data: **13 ottobre 2026**, aggiornata il **6 novembre 2026** per l'email di benvenuto agli invitati (Inviti Manager 1.2.1). Analisi del codice disponibile nel workspace, senza
 invio di email e senza modifiche al comportamento della piattaforma.
 
 ## 1. Risultato e perimetro
 
-Nel codice applicativo personalizzato sono presenti **5 chiamate di produzione a
-`wp_mail()`**, distribuite in due file PHP. Corrispondono a **tre famiglie di
+Nel codice applicativo personalizzato sono presenti **6 chiamate di produzione a
+`wp_mail()`**, distribuite in tre file PHP. Corrispondono a **quattro famiglie di
 messaggi**: invito al gioco, invito alla Scrivania, riepilogo della Scrivania per il
-creatore. L'invito alla Scrivania ha implementazioni distinte per primo invio,
+creatore e benvenuto dopo la registrazione tramite invito. L'invito alla Scrivania ha implementazioni distinte per primo invio,
 reinvio e percorso di fallback.
 
 Il repository contiene i plugin personalizzati, il tema child e un solo file
@@ -40,6 +40,7 @@ notifiche in pagina o realtime, non email.
 | E03 | Pulsante di reinvio / reinvito della Scrivania | Il destinatario dell'invito selezionato | `Invito al Tool Scrivania` | HTML UTF-8 | `class-scrivania-ajax.php:289`, chiamato a riga 735 |
 | E04 | Riepilogo dopo la creazione della Scrivania | L'utente creatore/invitante | `Link sessione Tool Scrivania (solo creatore)` | HTML UTF-8 | `class-scrivania-ajax.php:925` |
 | E05 | Invito Scrivania tramite il gestore alternativo | Ogni contatto passato al gestore | `Invito al Tool Scrivania` | HTML UTF-8 | `innerplay-inviti-manager.php:674` |
+| E06 | Registrazione riuscita tramite invito gioco o Scrivania | Il nuovo utente invitato | `Benvenuto su Inplayce Tools` | HTML UTF-8 | `includes/invite-registration.php`, funzione `gim_send_invited_welcome_email()` |
 
 File che contengono i testi:
 
@@ -170,7 +171,6 @@ fallback come percorso supportato.
 
 Non ho trovato invii applicativi per:
 
-- registrazione completata tramite invito / email di benvenuto all'invitato;
 - conferma che un partecipante abbia accettato o aperto l'invito;
 - cambio ruolo viewer/editor;
 - revoca di un invito o archiviazione di una sessione;
@@ -179,12 +179,16 @@ Non ho trovato invii applicativi per:
 - punteggio, classifica o completamento di un gioco;
 - creazione del documento Fatture in Cloud, invio del PDF, errori di fatturazione.
 
-Il modulo invitati usa `wp_insert_user()` in
-[invite-registration.php](../plugins/innerplay-inviti-manager/includes/invite-registration.php),
-riga 116, quindi autentica e reindirizza. Non chiama la notifica nuovi utenti di
-WordPress. `wp_insert_user()` espone comunque `user_register`: un altro plugin
-installato sul server potrebbe ascoltarlo e inviare messaggi. Non basta quindi
-la sola creazione dell'account a dimostrare che una notifica sia partita.
+Dal 6 novembre 2026 il modulo invitati usa `wp_insert_user()` in
+[invite-registration.php](../plugins/innerplay-inviti-manager/includes/invite-registration.php)
+e, solo in caso di creazione riuscita, invia il benvenuto E06 prima di autenticare
+e reindirizzare. Il messaggio contiene nome utente, link all'invito e alla dashboard
+invitato, senza password. Non viene inviato per login o account esistenti né
+retroattivamente. Un errore del trasporto non blocca l'accesso e viene registrato
+nel metadato `_gim_welcome_email_status` (`sent`/`failed`, senza retry automatico).
+Non chiama la notifica nuovi utenti di WordPress. `wp_insert_user()` espone comunque
+`user_register`: altri plugin possono avere notifiche indipendenti. L'esito
+positivo di `wp_mail()` non certifica la consegna effettiva.
 [Riferimento WordPress](https://developer.wordpress.org/reference/functions/wp_insert_user/).
 
 Il plugin [Fatture in Cloud](../plugins/fatture-in-cloud-sync/README.md) è in

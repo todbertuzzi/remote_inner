@@ -3,7 +3,7 @@
 /**
  * Plugin Name: Innerplay - Inviti Manager
  * Description: Gestisce inviti ai giochi e al tool scrivania con limite per Welcome, token univoci e invio email via wp_mail() (FluentSMTP/Elastic).
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: Emiliano Pallini
  */
 

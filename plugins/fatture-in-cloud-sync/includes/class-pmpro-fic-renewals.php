@@ -21,7 +21,7 @@ final class PMPro_FIC_Renewals {
         return $policy;
     }
 
-    public static function authorize($order, array $config) {
+    public static function authorize($order, array $config, ?array $automatic = null, ?callable $guard = null) {
         $snapshot = PMPro_FIC_Billing::snapshot((int) $order->id);
         if (is_wp_error($snapshot) || !$snapshot || !in_array($snapshot['origin'] ?? '', ['', 'initial_pair'], true)
             || (int) $snapshot['user_id'] !== (int) $order->user_id || (int) $snapshot['level_id'] !== (int) $order->membership_id
@@ -37,16 +37,55 @@ final class PMPro_FIC_Renewals {
             $allowed = PMPro_FIC_Initial_Pair::guard($order, null, $payment);
             if (is_wp_error($allowed)) return $allowed;
         }
+        if ($automatic !== null) {
+            if (!$guard || ($automatic['renewals'] ?? false) !== true || ($automatic['first'] ?? false) !== true
+                || ($automatic['level_id'] ?? 0) !== (int) $order->membership_id || !is_int($automatic['authorized_by'] ?? null) || $automatic['authorized_by'] < 1
+                || !isset($automatic['after_order_id']) || (int) $order->id <= $automatic['after_order_id']) return new WP_Error('plan_authorization', 'Regola del piano non valida per questo nuovo abbonamento.');
+            $fresh = $guard();
+            if (is_wp_error($fresh)) return $fresh;
+            if (!is_object($fresh) || (string) $fresh->payment_transaction_id !== $payment['payment_id']
+                || (string) $fresh->subscription_transaction_id !== $payment['subscription_id'] || $fresh->status !== 'success'
+                || PMPro_FIC_Billing::snapshot((int) $order->id) !== $snapshot
+                || get_pmpro_membership_order_meta((int) $order->id, PMPro_FIC_Test_Orders::META, true) !== $document) return new WP_Error('plan_changed', 'Ordine, incasso o dati fiscali cambiati durante l’abilitazione. Verifica manualmente.');
+            if (get_option(self::key((string) $order->subscription_transaction_id) . '_paused', false)) return ['state'=>'suspended', 'message'=>'Fatturazione sospesa manualmente. Nessuna riattivazione automatica.'];
+        }
         $policy = ['schema_version' => 1, 'source_order_id' => (int) $order->id, 'user_id' => (int) $order->user_id, 'level_id' => (int) $order->membership_id,
             'subscription_id' => (string) $order->subscription_transaction_id, 'source_payment_id' => $payment['payment_id'],
             'scope' => $config['scope'], 'company_id' => $config['company_id'], 'account_id' => $config['account_id'],
-            'effective_from' => time(), 'authorized_by' => get_current_user_id(), 'snapshot' => $snapshot];
+            'effective_from' => time(), 'authorized_by' => $automatic !== null ? $automatic['authorized_by'] : get_current_user_id(), 'snapshot' => $snapshot];
+        if ($automatic !== null) $policy['authorization_origin'] = ['type'=>'plan', 'revision'=>$automatic['revision'], 'saved_at'=>$automatic['saved_at']];
         $key = self::key($policy['subscription_id']);
         $existing = PMPro_FIC_Atomic_Store::read($key);
         if (is_wp_error($existing)) return $existing;
         if ($existing !== null) return new WP_Error('renewal_exists', 'Abbonamento già autorizzato. La copia fiscale non viene sovrascritta; usa Controlla autorizzazione.');
         if (!PMPro_FIC_Atomic_Store::insert($key, $policy) || PMPro_FIC_Atomic_Store::read($key) !== $policy) return new WP_Error('payment_storage', 'Impossibile registrare l’autorizzazione ai rinnovi.');
         return ['message' => 'Rinnovi autorizzati per ' . $policy['subscription_id'] . ', solo per incassi successivi a ' . gmdate('Y-m-d H:i:s', $policy['effective_from']) . ' UTC. Dati fiscali dell’ordine #' . $policy['source_order_id'] . ' confermati e bloccati.'];
+    }
+
+    /** Called only after a confirmed initial document; never rewrites an existing policy or pause flag. */
+    public static function authorize_automatic($order, array $config, array $rule, callable $guard) {
+        if (!(defined('DOING_CRON') && DOING_CRON) && !current_user_can('manage_options')) return new WP_Error('forbidden', 'Operazione riservata alla coda.');
+        $policy = self::policy($order);
+        if (is_wp_error($policy)) return $policy;
+        if (get_option(self::key((string) $order->subscription_transaction_id) . '_paused', false)) return ['state'=>'suspended', 'message'=>'Fatturazione sospesa manualmente. Nessuna riattivazione automatica.'];
+        $snapshot = PMPro_FIC_Billing::snapshot((int) $order->id);
+        if ($policy) {
+            if ($policy['source_order_id'] !== (int) $order->id || $policy['source_payment_id'] !== (string) $order->payment_transaction_id
+                || $policy['scope'] !== $config['scope'] || $policy['account_id'] !== $config['account_id'] || $policy['company_id'] !== $config['company_id']
+                || $policy['snapshot'] !== $snapshot) return new WP_Error('plan_conflict', 'Esiste un’autorizzazione diversa. Nessun dato sovrascritto; controlla l’abbonamento.');
+            return ['state'=>'authorized', 'message'=>'Fatturazione dei rinnovi già autorizzata. Copia fiscale conservata.'];
+        }
+        // An automatic enrolment must be a new checkout, never a reconstructed pair or a renewal.
+        if (is_wp_error($snapshot) || !$snapshot || !empty($snapshot['origin'])) return new WP_Error('plan_source', 'L’abilitazione automatica richiede un nuovo checkout con copia fiscale valida.');
+        $orders = method_exists('MemberOrder', 'get_orders') ? MemberOrder::get_orders(['subscription_transaction_id'=>(string) $order->subscription_transaction_id, 'gateway'=>'paypal', 'gateway_environment'=>'sandbox', 'limit'=>2]) : null;
+        if (!is_array($orders) || count($orders) !== 1 || (int) reset($orders)->id !== (int) $order->id) return new WP_Error('plan_ambiguous', 'L’abbonamento ha più ordini o un’associazione ambigua. Controlla prima di autorizzare i rinnovi.');
+        $owner = PMPro_FIC_Atomic_Store::read(PMPro_FIC_Payments::key($order));
+        if (is_wp_error($owner)) return $owner;
+        if (!is_array($owner) || ($owner['order_id'] ?? 0) !== (int) $order->id || ($owner['company_id'] ?? 0) !== $config['company_id']
+            || ($owner['subscription_id'] ?? '') !== (string) $order->subscription_transaction_id
+            || ($owner['cents'] ?? 0) !== (int) round((float) $order->total * 100)) return new WP_Error('plan_payment', 'Associazione tra incasso e documento iniziale non confermata. Verifica l’ordine.');
+        $result = self::authorize($order, $config, $rule, $guard);
+        return is_wp_error($result) ? $result : $result + ['state'=>'authorized'];
     }
 
     private static function matches($order, array $policy, array $config): bool {

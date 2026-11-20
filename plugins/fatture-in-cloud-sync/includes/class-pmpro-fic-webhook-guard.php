@@ -359,6 +359,10 @@ final class PMPro_FIC_Webhook_Guard {
         echo '<hr><h2>Guardia webhook primo incasso</h2><p>Interviene sul webhook PayPal Sandbox <code>PAYMENT.SALE.COMPLETED</code>: associa al checkout l’incasso iniziale verificato in PayPal, può rispondere HTTP 503 per far riprovare PayPal e non crea né cancella ordini.</p>';
         echo '<p><strong>Stato effettivo: ' . ($active ? 'attiva' : 'NON attiva') . '</strong> — gateway <code>' . esc_html((string) $gateway) . '</code>, ambiente <code>'
             . esc_html((string) $environment) . '</code>, filtro <code>pmpro_fic_webhook_guard_enabled</code> ' . ($filter ? 'consente' : 'disattiva') . ' la guardia.</p>';
+        echo '<p class="description">Il controllo degli audit esamina gli ultimi 100 registri di recupero e gli eventi recenti; non è una ricerca completa dello storico.</p>';
+        if (isset($_GET['guard_resumed'], $_GET['guard_pending']) && is_scalar($_GET['guard_resumed']) && is_scalar($_GET['guard_pending'])) {
+            echo '<div class="notice notice-info inline"><p>Ultima ripresa: ' . max(0, (int) $_GET['guard_resumed']) . ' audit completati; ' . max(0, (int) $_GET['guard_pending']) . ' ancora incompleti nel campione controllato.</p></div>';
+        }
         $pending = self::pending_audits();
         if ($pending) {
             echo '<p><strong>Audit incompleti: ' . esc_html((string) count($pending)) . '</strong> (ordini ' . esc_html(implode(', ', array_map('strval', array_keys($pending)))) . '). L’ID incasso è già associato; manca solo la conferma del registro, che non crea fatture.</p>';
@@ -368,13 +372,17 @@ final class PMPro_FIC_Webhook_Guard {
         }
         $log = get_option(self::LOG, []);
         if (!is_array($log) || !$log) { echo '<p>Nessun evento registrato. Le uscite anticipate (firma non valida, evento non pertinente, abbonamento con più ordini) non vengono registrate: l’elenco vuoto non prova che non sia arrivato alcun webhook.</p>'; return; }
-        echo '<table class="widefat striped"><thead><tr><th>UTC</th><th>Esito</th><th>Ordine</th><th>Abbonamento</th><th>Incasso</th><th>Evento</th></tr></thead><tbody>';
+        $labels = ['bound' => 'Pagamento associato', 'token_retry' => 'Checkout in corso: nuovo tentativo richiesto',
+            'bound_audit_pending' => 'Pagamento associato, registro da completare', 'audit_repaired' => 'Registro completato',
+            'audit_repair_retry' => 'Registro da completare: nuovo tentativo richiesto', 'repair_not_scheduled' => 'Verifica del registro non programmata',
+            'not_initial' => 'Incasso successivo al primo', 'checkout_mismatch' => 'Date del checkout e dell’incasso non corrispondenti'];
+        echo '<div class="fic-table-scroll"><table class="widefat striped"><thead><tr><th>UTC</th><th>Esito</th><th>Ordine</th><th>Abbonamento</th><th>Incasso</th><th>Evento</th></tr></thead><tbody>';
         foreach (array_reverse(array_slice($log, -10)) as $entry) {
             if (!is_array($entry)) continue;
-            echo '<tr><td>' . esc_html((string) ($entry['at'] ?? '')) . '</td><td>' . esc_html((string) ($entry['outcome'] ?? '')) . '</td><td>'
+            echo '<tr><td>' . esc_html((string) ($entry['at'] ?? '')) . '</td><td>' . esc_html($labels[$entry['outcome'] ?? ''] ?? 'Evento da verificare') . '<details><summary>Codice tecnico</summary><code>' . esc_html((string) ($entry['outcome'] ?? '')) . '</code></details></td><td>'
                 . esc_html((string) ($entry['order_id'] ?? '')) . '</td><td>' . esc_html((string) ($entry['subscription_id'] ?? '')) . '</td><td>'
                 . esc_html((string) ($entry['sale_id'] ?? '')) . '</td><td>' . esc_html((string) ($entry['event_id'] ?? '')) . '</td></tr>';
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></div>';
     }
 }

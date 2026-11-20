@@ -172,7 +172,7 @@ $auto=renewal_fixture(false); unset($order_meta[42][PMPro_FIC_Test_Orders::META]
 $sale_responses=[sale_response(['id'=>'PAYPAL-TEST-1','state'=>'refunded'])]; run_job($auto);
 check(job42()['state']==='blocked' && posts()===0, 'Initial payment with preexisting ID is also verified remotely before any new invoice');
 
-$auto=renewal_fixture(); $html=render_page();
-check(strpos($html,'Autorizza rinnovi di questo abbonamento')!==false && strpos($html,'Sospendi fatturazione rinnovi')!==false,'Renewal controls are available in backend');
+$auto=renewal_fixture(); $_GET['fic_section']='rinnovi'; $html=render_page();
+check(strpos($html,'Autorizza la fatturazione dei rinnovi')!==false && strpos($html,'Sospendi fatturazione rinnovi')!==false,'Renewal controls are available in backend');
 check(strpos($html,'fake-sandbox-token')===false && strpos($html,'fake-paypal-secret')===false,'Backend excludes credentials');
 echo "PASS: $checks renewal/payment checks; HTTP and WordPress simulated; reservation SQL executed on SQLite.\n";

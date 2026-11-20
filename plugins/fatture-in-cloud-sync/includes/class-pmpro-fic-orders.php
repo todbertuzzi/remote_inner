@@ -548,13 +548,13 @@ final class PMPro_FIC_Test_Orders {
     }
 
     private function form_start(string $action): void {
-        echo '<form method="post" action="' . esc_url(admin_url('options-general.php?page=' . PMPro_FattureInCloud_Sync::PAGE) . '#fic-order-result') . '">';
+        echo '<form method="post" action="' . esc_url(admin_url('options-general.php?page=' . PMPro_FattureInCloud_Sync::PAGE . '&fic_section=documenti') . '#fic-order-result') . '">';
         wp_nonce_field(PMPro_FattureInCloud_Sync::NONCE);
         echo '<input type="hidden" name="fic_action" value="' . esc_attr($action) . '">';
     }
 
     public function render($result, string $action): void {
-        echo '<hr><h2>3. Documento da ordine PayPal Sandbox</h2>';
+        echo '<h2>Documento da ordine PayPal Sandbox</h2>';
         if (!class_exists('MemberOrder')) { echo '<p id="fic-order-result" tabindex="-1" style="scroll-margin-top:48px">Attiva Paid Memberships Pro per utilizzare questa sezione.</p>'; return; }
         echo '<p>Inserisci l’ID numerico visibile in Memberships / Abbonamenti → Ordini. Usa un ordine PayPal Sandbox pagato in euro. I dati cliente sono per un test italiano non elettronico.</p>';
         $this->form_start('load_order');

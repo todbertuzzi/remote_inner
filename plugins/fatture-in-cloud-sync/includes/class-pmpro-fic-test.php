@@ -10,6 +10,7 @@ final class PMPro_FattureInCloud_Sync {
     private $diagnostics;
 
     public function __construct() {
+        add_action('admin_enqueue_scripts', ['PMPro_FIC_Admin', 'enqueue']);
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         $this->automation = new PMPro_FIC_Automation($this);
@@ -147,7 +148,7 @@ final class PMPro_FattureInCloud_Sync {
                 echo '<textarea id="' . esc_attr($field_id) . '" name="' . esc_attr($name . '[' . $id . ']') . '" rows="2" maxlength="1000" class="large-text" placeholder="Inserisci la descrizione completa per questo piano">' . esc_html($options['plan_descriptions'][$id] ?? '') . '</textarea></p>';
             }
             echo '<p class="description">Il testo compilato viene usato integralmente per quel piano, senza aggiungere il numero del livello. Se lasci vuoto, resta la descrizione generica seguita da “— livello #ID”. Gli ordini gratuiti non generano documenti.</p>';
-            echo '<p class="description">Le modifiche riguardano i documenti ancora da creare. Se cambi un testo e salvi, riattiva l’automazione nella sezione 4 e rigenera eventuali anteprime.</p>';
+            echo '<p class="description">Le modifiche riguardano i documenti ancora da creare. Se cambi un testo e salvi, riattiva l’automazione in Impostazioni → Automazione e rigenera eventuali anteprime.</p>';
         } elseif ($key === 'access_token') {
             if (defined('PMPRO_FIC_ACCESS_TOKEN')) {
                 echo '<p>Token configurato sul server tramite PMPRO_FIC_ACCESS_TOKEN.</p>';
@@ -163,7 +164,7 @@ final class PMPro_FattureInCloud_Sync {
                 echo '<option value="' . esc_attr((string) $vat['id']) . '" ' . selected((string) $options['vat_id'], (string) $vat['id'], false) . '>';
                 echo esc_html($vat['description'] . ' — ' . $vat['value'] . '% (ID ' . $vat['id'] . ')') . '</option>';
             }
-            echo '</select><p class="description">Usata nella simulazione e nei documenti di prova della sezione 3. Non modifica le imposte del checkout.</p>';
+            echo '</select><p class="description">Usata nella simulazione e nei documenti di prova in Documenti. Non modifica le imposte del checkout.</p>';
         } else {
             echo '<input aria-label="' . esc_attr($key === 'company_id' ? 'Codice Cliente' : 'Descrizione del servizio') . '" type="text" name="' . esc_attr($name) . '" value="' . esc_attr((string) $options[$key]) . '" class="regular-text">';
         }
@@ -257,7 +258,7 @@ final class PMPro_FattureInCloud_Sync {
     }
 
     private function action_form(string $action, string $label): void {
-        echo '<form method="post" action="' . esc_url(admin_url('options-general.php?page=' . self::PAGE)) . '">';
+        echo '<form method="post" action="' . esc_url(PMPro_FIC_Admin::url($action === 'connect' ? 'impostazioni' : 'assistenza')) . '">';
         wp_nonce_field(self::NONCE);
         echo '<input type="hidden" name="fic_action" value="' . esc_attr($action) . '">';
         if ($action === 'simulate') echo '<label for="fic-amount">Totale IVA inclusa (€)</label> <input id="fic-amount" name="amount" type="text" inputmode="decimal" value="122,00" required>';
@@ -318,26 +319,27 @@ final class PMPro_FattureInCloud_Sync {
             elseif (in_array($action, PMPro_FIC_Diagnostics::ACTIONS, true)) $result = $this->diagnostics->dispatch($action, wp_unslash($_POST));
             else $result = new WP_Error('invalid_action', 'Operazione non disponibile.');
         }
-        echo '<div class="wrap"><h1>PMPro → Fatture in Cloud</h1>';
-        echo '<div class="notice notice-info inline"><p><strong>Modalità di collaudo.</strong> La sezione 3 crea documenti manualmente; la sezione 4 abilita la coda per gli acquisti PayPal Sandbox e autorizza i singoli abbonamenti di prova per i rinnovi. I documenti vengono creati nell’azienda di prova, nel sezionale /TEST, senza invio allo SDI o email.</p></div>';
-        settings_errors(self::OPTION_NAME);
-        $order_action = in_array($action, PMPro_FIC_Test_Orders::ACTIONS, true);
-        $auto_action = in_array($action, PMPro_FIC_Automation::ACTIONS, true);
-        $diagnostic_action = in_array($action, PMPro_FIC_Diagnostics::ACTIONS, true);
-        if (is_wp_error($result) && !$order_action && !$auto_action && !$diagnostic_action) echo '<div class="notice notice-error inline"><p>' . esc_html($result->get_error_message()) . '</p></div>';
-        elseif ($result !== null && $action === 'connect') echo '<div class="notice notice-success inline"><p>Collegamento riuscito. Azienda e aliquote lette correttamente. Seleziona ora l’aliquota e salva.</p></div>';
+        PMPro_FIC_Admin::render($this, $this->automation, $this->diagnostics, $orders, $result, $action);
+    }
+
+    public function render_connection_settings(): void {
+        echo '<p>Le impostazioni salvate vengono conservate dopo l’aggiornamento. Una modifica a collegamento, aliquota o descrizioni richiede di riconfigurare l’automazione.</p>';
+        if (!$this->connection($this->options())) echo '<div class="notice notice-info inline"><p>Verifica del collegamento assente o scaduta: non indica necessariamente un errore. Prima di salvare le impostazioni, verifica il collegamento e seleziona l’aliquota.</p></div>';
         echo '<form method="post" action="options.php">';
         settings_fields(self::OPTION_GROUP);
         do_settings_sections(self::PAGE);
         submit_button('Salva impostazioni');
-        echo '</form><hr><h2>1. Verifica del collegamento</h2><p>Usa i dati già salvati. Questa verifica legge azienda e aliquote; non verifica i permessi di scrittura sulle fatture.</p>';
+        echo '</form><h3>Verifica del collegamento</h3><p>Usa i dati già salvati. Questa verifica legge azienda e aliquote; non verifica i permessi di scrittura sulle fatture.</p>';
         $this->action_form('connect', 'Verifica collegamento e carica aliquote');
         $connection = $this->connection($this->options());
         if ($connection) {
             echo '<p><strong>Azienda:</strong> ' . esc_html($connection['company_name']) . ' · Codice Cliente ' . esc_html((string) $connection['company_id']) . '</p>';
             echo '<p>Ultima verifica: ' . esc_html($connection['checked_at']) . ' (valida per un’ora).</p>';
         }
-        echo '<hr><h2>2. Simula una fattura campione</h2><p>Calcolo locale con una sola voce in euro e totale IVA inclusa. Non include bollo, ritenute, casse previdenziali o regole fiscali speciali. Non certifica la validità fiscale o l’accettazione del documento da parte delle API.</p>';
+    }
+
+    public function render_simulation($result, string $action): void {
+        echo '<h2>Simula una fattura campione</h2><p>Calcolo locale con una sola voce in euro e totale IVA inclusa. Non include bollo, ritenute, casse previdenziali o regole fiscali speciali. Non certifica la validità fiscale o l’accettazione del documento da parte delle API.</p>';
         $this->action_form('simulate', 'Simula senza creare documenti');
         if ($result !== null && !is_wp_error($result) && $action === 'simulate') {
             echo '<h3>Anteprima locale</h3><table class="widefat striped"><tbody>';
@@ -347,10 +349,5 @@ final class PMPro_FattureInCloud_Sync {
             echo '</tbody></table><p>Aliquota: ' . esc_html($result['vat_description']) . '</p>';
             echo '<details><summary>Dati tecnici della simulazione</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' . esc_html(wp_json_encode($result['payload'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) . '</pre></details>';
         }
-        $orders->render($result, $action);
-        $this->automation->render($result, $action);
-        $this->diagnostics->render($result, $action);
-        PMPro_FIC_Webhook_Guard::render_status();
-        echo '</div>';
     }
 }

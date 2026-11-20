@@ -54,6 +54,7 @@ function validate_username($value) { return preg_match('/^[a-zA-Z0-9_.-]+$/', $v
 function username_exists($name) { foreach ($GLOBALS['users'] as $user) if ($user->user_login === $name) return $user->ID; return false; }
 function email_exists($email) { foreach ($GLOBALS['users'] as $user) if (strcasecmp($user->user_email, $email) === 0) return $user->ID; return false; }
 function wp_insert_user($data) {
+    if ($GLOBALS['insertError']) return new WP_Error('db_insert_error', 'Database unavailable');
     $GLOBALS['insertions'][] = $data;
     $id = count($GLOBALS['users']) + 100;
     $GLOBALS['users'][$id] = new WP_User($id, $data['user_email'], [$data['role']], $data['user_login']);
@@ -102,7 +103,7 @@ function wp_redirect($url) {
     if ($GLOBALS['headers']) throw new RuntimeException('Redirect after header output');
     $GLOBALS['redirect'] = $url;
 }
-function wp_mail(...$args) { throw new RuntimeException('Unexpected email'); }
+function wp_mail(...$args) { $GLOBALS['emails'][] = $args; return $GLOBALS['mailResult']; }
 require dirname(__DIR__) . '/includes/invite-registration.php';
 $root = dirname(__DIR__, 3);
 require $root . '/plugins/innerplay-access-control/innerplay-access-control.php';
@@ -110,8 +111,9 @@ $source = file_get_contents(dirname(__DIR__) . '/innerplay-inviti-manager.php');
 preg_match('/function gim_game_bind_invited_user\(.*?^\}/ms', $source, $match);
 eval($match[0]);
 function reset_fixture() {
-    foreach (['users', 'roles', 'meta', 'levels', 'insertions', 'writes', 'actions'] as $key) $GLOBALS[$key] = [];
+    foreach (['users', 'roles', 'meta', 'levels', 'insertions', 'writes', 'actions', 'emails'] as $key) $GLOBALS[$key] = [];
     foreach (['current', 'headers', 'footers', 'cookie'] as $key) $GLOBALS[$key] = 0;
+    $GLOBALS['mailResult'] = true; $GLOBALS['insertError'] = false;
     $GLOBALS['status'] = 200; $GLOBALS['redirect'] = ''; $GLOBALS['nocache'] = false;
     $GLOBALS['postStatus'] = 'publish'; $GLOBALS['page'] = 'login';
     $GLOBALS['wpdb'] = new InviteDB();
@@ -131,6 +133,7 @@ if (isset($argv[1])) {
     if (str_contains($scenario, 'existing') || str_contains($scenario, 'authorized') || str_contains($scenario, 'wrong-account')) $users[7] = new WP_User(7, str_contains($scenario, 'wrong-account') ? 'other@example.test' : 'guest@example.test', ['subscriber']);
     if (str_contains($scenario, 'authorized') || str_contains($scenario, 'wrong-account')) $current = 7;
     if (str_contains($scenario, 'submit')) { $_SERVER['REQUEST_METHOD'] = 'POST'; $_POST = input_for($kind, $token) + ['gim_invite_register' => '1']; }
+    if (str_contains($scenario, 'mail-failure')) $mailResult = false;
     if (str_contains($scenario, 'bad-nonce')) $_POST['gim_invite_nonce'] = 'wrong';
     if ($scenario === 'desk-unverified') $wpdb->desk->verified_at = null;
     if ($scenario === 'game-revoked') $wpdb->game->status = 'revoked';
@@ -140,7 +143,7 @@ if (isset($argv[1])) {
     ob_start();
     register_shutdown_function(function () {
         $html = ob_get_clean();
-        echo json_encode(['html' => $html, 'headers' => $GLOBALS['headers'], 'footers' => $GLOBALS['footers'], 'status' => $GLOBALS['status'], 'redirect' => $GLOBALS['redirect'], 'cookie' => $GLOBALS['cookie'], 'nocache' => $GLOBALS['nocache'], 'insertions' => $GLOBALS['insertions'], 'writes' => $GLOBALS['writes']]);
+        echo json_encode(['html' => $html, 'headers' => $GLOBALS['headers'], 'footers' => $GLOBALS['footers'], 'status' => $GLOBALS['status'], 'redirect' => $GLOBALS['redirect'], 'cookie' => $GLOBALS['cookie'], 'nocache' => $GLOBALS['nocache'], 'insertions' => $GLOBALS['insertions'], 'writes' => $GLOBALS['writes'], 'emails' => $GLOBALS['emails'], 'meta' => $GLOBALS['meta']]);
     });
     if (str_starts_with($scenario, 'legacy-')) {
         $_GET['redirect_to'] = match ($scenario) {
@@ -166,9 +169,15 @@ foreach (['game' => 'game-token', 'scrivania' => 'desk-token'] as $kind => $toke
     denied(gim_register_invited_user($kind, $token, array_replace($input, ['gim_invite_nonce' => input_for($kind, 'another-token')['gim_invite_nonce']])), 'invalid_nonce');
     denied(gim_register_invited_user($kind, $token, array_replace($input, ['user_pass' => 'short'])), 'invalid_password');
     denied(gim_register_invited_user($kind, $token, array_replace($input, ['user_login' => ['bad']])), 'invalid_username');
-    check(!$insertions, 'Invalid forms never create accounts');
+    check(!$insertions && !$emails, 'Invalid forms never create accounts or send mail');
     $id = gim_register_invited_user($kind, $token, $input);
     check(is_int($id) && $users[$id]->roles === ['invitato'], 'New account has only invited role');
+    check(count($emails) === 1 && $emails[0][0] === 'guest@example.test', 'Welcome goes only to the new account recipient');
+    check($emails[0][1] === 'Benvenuto su Inplayce Tools', 'Welcome subject');
+    check(str_contains($emails[0][2], 'new-guest') && str_contains($emails[0][2], $token) && str_contains($emails[0][2], '/dashboard-invitato/'), 'Welcome includes username, correct invitation and dashboard');
+    check(str_contains($emails[0][2], $kind === 'game' ? 'Vai alla partita' : 'Vai alla sessione Scrivania'), 'Welcome matches invitation kind');
+    check(!str_contains($emails[0][2], 'attacker@example.test') && !str_contains($emails[0][2], 'P@ss'), 'Welcome excludes submitted email and password');
+    check($emails[0][3] === ['Content-Type: text/html; charset=UTF-8'] && $meta[$id]['_gim_welcome_email_status'] === 'sent', 'HTML mail and transport outcome recorded');
     check($insertions[0]['user_email'] === 'guest@example.test', 'Recipient identity comes exclusively from invite');
     check($insertions[0]['user_pass'] === 'P@ss<word>\\"123', 'Password punctuation preserved');
     check($roles['invitato'] === ['read' => true] && !$levels, 'Minimum role, no membership created');
@@ -177,6 +186,7 @@ foreach (['game' => 'game-token', 'scrivania' => 'desk-token'] as $kind => $toke
     $current = $id;
     denied(gim_register_invited_user($kind, $token, $input), 'already_logged_in');
     check(gim_require_invited_account($kind, $token)['email'] === 'guest@example.test', 'Authenticated user continues without registration');
+    check(count($emails) === 1, 'Repeated registration and authenticated access do not resend welcome');
     check(ipt_validate_game_session_access($wpdb->game, $users[$id]) === true, 'Invited role can play without plan');
     check(gim_scrivania_invite_matches_user($wpdb->desk, $users[$id]), 'Invited role matches desk recipient');
     $levels[$id] = [(object) ['id' => 4]];
@@ -185,6 +195,16 @@ foreach (['game' => 'game-token', 'scrivania' => 'desk-token'] as $kind => $toke
     $levels[$id] = [];
     gim_sync_invited_membership_role(0, $id);
     check($users[$id]->roles === ['invitato'], 'Cancellation restores invited role');
+}
+foreach (['game' => 'game-token', 'scrivania' => 'desk-token'] as $kind => $token) {
+    reset_fixture();
+    $insertError = true;
+    denied(gim_register_invited_user($kind, $token, input_for($kind, $token)), 'db_insert_error');
+    check(!$emails && !$users, 'Failed account creation never sends welcome');
+    $insertError = false; $mailResult = false;
+    $id = gim_register_invited_user($kind, $token, input_for($kind, $token));
+    check(is_int($id) && isset($users[$id]) && count($emails) === 1, 'Mail failure preserves successful account creation');
+    check($meta[$id]['_gim_welcome_email_status'] === 'failed', 'Mail failure outcome recorded');
 }
 reset_fixture();
 foreach (['revoked', 'cancelled', 'canceled', 'admin_preview', 'member_preview'] as $status) {
@@ -228,12 +248,16 @@ foreach (['game', 'desk'] as $kind) {
     check(str_contains($result['html'], 'Crea account e continua') && str_contains($result['html'], 'Non serve scegliere un piano'), 'Invitation registration without plan');
     check($result['headers'] === 1 && $result['footers'] === 1 && $result['nocache'], 'Theme frame once, page uncached');
     $result = render($kind . '-existing');
-    check(str_contains($result['html'], 'class="login"') && !str_contains($result['html'], 'gim_invite_register'), 'Existing accounts only log in');
+    check(str_contains($result['html'], 'class="login"') && !str_contains($result['html'], 'gim_invite_register') && !$result['emails'], 'Existing accounts only log in without welcome mail');
     $result = render($kind . '-submit');
     check($result['cookie'] > 0 && !$result['headers'] && count($result['insertions']) === 1, 'Registration logs in before output');
     check(str_contains($result['redirect'], $kind === 'game' ? '/gioca/?invito=game-token' : '/invito-scrivania/?token=desk-token'), 'Registration returns to its invite');
+    check(count($result['emails']) === 1, 'Registration flow sends exactly one welcome');
+    $result = render($kind . '-submit-mail-failure');
+    check($result['cookie'] > 0 && $result['redirect'] && !$result['headers'] && count($result['emails']) === 1, 'Mail failure does not prevent automatic login or redirect');
+    check($result['meta'][$result['cookie']]['_gim_welcome_email_status'] === 'failed', 'Flow records failed email');
     $result = render($kind . '-submit-bad-nonce');
-    check($result['status'] === 403 && !$result['insertions'] && !$result['cookie'], 'POST rejects invalid nonce');
+    check($result['status'] === 403 && !$result['insertions'] && !$result['cookie'] && !$result['emails'], 'POST rejects invalid nonce');
     $result = render($kind . '-authorized');
     check(str_contains($result['redirect'], $kind === 'game' ? '/giochi/12/?invito_uuid=game-token' : '/tool-scrivania/?token=session-token') && !$result['headers'], 'Invited account reaches game/tool');
     $result = render($kind . '-wrong-account');

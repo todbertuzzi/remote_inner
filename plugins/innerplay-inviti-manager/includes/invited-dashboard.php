@@ -319,42 +319,44 @@ function gim_render_invited_dashboard_section($title, $section_class, $invites, 
         <?php else : ?>
             <div class="invited-dashboard-list">
                 <?php foreach ($invites as $invite) : ?>
-                    <article class="invited-dashboard-card invited-dashboard-card--<?php echo esc_attr($invite['status']); ?>">
-                        <div class="invited-dashboard-card-main">
-                            <div class="invited-dashboard-card-title-row">
-                                <h3><?php echo esc_html($invite['title']); ?></h3>
-                                <span class="invited-dashboard-status invited-dashboard-status--<?php echo esc_attr($invite['status']); ?>">
-                                    <?php echo esc_html($invite['status_label']); ?>
-                                </span>
+                    <article class="invited-dashboard-item">
+                        <h3 class="invited-dashboard-item-title"><?php echo esc_html($invite['title']); ?></h3>
+                        <div class="invited-dashboard-card invited-dashboard-card--<?php echo esc_attr($invite['status']); ?>">
+                            <div class="invited-dashboard-card-main">
+                                <div class="invited-dashboard-card-title-row">
+                                    <span class="invited-dashboard-status invited-dashboard-status--<?php echo esc_attr($invite['status']); ?>">
+                                        <?php echo esc_html($invite['status_label']); ?>
+                                    </span>
+                                </div>
+
+                                <dl class="invited-dashboard-meta">
+                                    <?php if (!empty($invite['inviter_name'])) : ?>
+                                        <div><dt>Invitato da</dt><dd><?php echo esc_html($invite['inviter_name']); ?></dd></div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($invite['when'])) : ?>
+                                        <div><dt>Quando</dt><dd><?php echo esc_html($invite['when']); ?></dd></div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($invite['role'])) : ?>
+                                        <div><dt>Ruolo</dt><dd><?php echo esc_html(gim_invited_dashboard_role_label($invite['role'])); ?></dd></div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($invite['received_at'])) : ?>
+                                        <div><dt>Ricevuto</dt><dd><?php echo esc_html($invite['received_at']); ?></dd></div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($invite['expires_at'])) : ?>
+                                        <div><dt>Scadenza</dt><dd><?php echo esc_html($invite['expires_at']); ?></dd></div>
+                                    <?php endif; ?>
+                                </dl>
                             </div>
 
-                            <dl class="invited-dashboard-meta">
-                                <?php if (!empty($invite['inviter_name'])) : ?>
-                                    <div><dt>Invitato da</dt><dd><?php echo esc_html($invite['inviter_name']); ?></dd></div>
+                            <div class="invited-dashboard-card-action">
+                                <?php if (!empty($invite['can_access']) && !empty($invite['access_url'])) : ?>
+                                    <a class="invited-dashboard-button" href="<?php echo esc_url($invite['access_url']); ?>">
+                                        <?php echo esc_html($button_label); ?>
+                                    </a>
+                                <?php else : ?>
+                                    <span class="invited-dashboard-unavailable">Non disponibile</span>
                                 <?php endif; ?>
-                                <?php if (!empty($invite['when'])) : ?>
-                                    <div><dt>Quando</dt><dd><?php echo esc_html($invite['when']); ?></dd></div>
-                                <?php endif; ?>
-                                <?php if (!empty($invite['role'])) : ?>
-                                    <div><dt>Ruolo</dt><dd><?php echo esc_html(gim_invited_dashboard_role_label($invite['role'])); ?></dd></div>
-                                <?php endif; ?>
-                                <?php if (!empty($invite['received_at'])) : ?>
-                                    <div><dt>Ricevuto</dt><dd><?php echo esc_html($invite['received_at']); ?></dd></div>
-                                <?php endif; ?>
-                                <?php if (!empty($invite['expires_at'])) : ?>
-                                    <div><dt>Scadenza</dt><dd><?php echo esc_html($invite['expires_at']); ?></dd></div>
-                                <?php endif; ?>
-                            </dl>
-                        </div>
-
-                        <div class="invited-dashboard-card-action">
-                            <?php if (!empty($invite['can_access']) && !empty($invite['access_url'])) : ?>
-                                <a class="invited-dashboard-button" href="<?php echo esc_url($invite['access_url']); ?>">
-                                    <?php echo esc_html($button_label); ?>
-                                </a>
-                            <?php else : ?>
-                                <span class="invited-dashboard-unavailable">Non disponibile</span>
-                            <?php endif; ?>
+                            </div>
                         </div>
                     </article>
                 <?php endforeach; ?>
